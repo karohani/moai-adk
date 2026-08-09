@@ -4,7 +4,7 @@ title: "Claude/Codex/OpenCode Compatibility Spine"
 version: "0.2.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-08-09
+updated: 2026-08-10
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -117,3 +117,75 @@ Note on `plan_status: audit-ready` — this records that the artifacts are ready
   - `env GOCACHE=/private/tmp/moai-gocache go test ./internal/agenthost ./internal/cli ./internal/config -run 'BuildLaunchCommand|Host|Codex|OpenCode|LoadRoleProfiles|WorkflowConfig|TeamConfig|RoleProfile|FeatureMatrix|RootCmd'` PASS.
   - `env GOCACHE=/private/tmp/moai-gocache GOMODCACHE=/private/tmp/moai-modcache go test ./internal/cli -run 'I18nKeySetParity|BridgeFieldDefResolver|TUIRendersSchemaFieldSet|RunHookEvent_ReadInputError|RunAgentHook_ReadInputError'` PASS.
   - `GOCACHE=/private/tmp/moai-gocache GOMODCACHE=/private/tmp/moai-modcache go test ./...` PASS with external permission for module cache, home-scoped test fixtures, and local listener tests.
+
+## §E.2 Run-phase Evidence
+
+Milestone: Phase 5 (host templates) + the Phase 6 degradation-note remainder + the AC-AH-017 `--attach` correction carried over from Phase 2. Commits `2d01cdf95` (M1) and `20e8e1a9a` (M2).
+
+Every row below records a command that was actually run in this milestone and the output that was observed. A criterion with no observed command output is recorded as a gap, not a pass.
+
+### Acceptance criteria
+
+| AC | Status | Verification command | Actual output |
+|----|--------|----------------------|---------------|
+| AC-AH-004 (Codex command builder, per-flag arity) | PASS | `go test -run 'TestBuildLaunchCommand_Codex' ./internal/agenthost/` | `ok github.com/modu-ai/moai-adk/internal/agenthost` — subtests assert `--cd`, `--model`, `--profile`, `--sandbox`, `--ask-for-approval`, `--config` each with its value, plus `argv[1] == exec` and the interactive no-`exec` case |
+| AC-AH-005 (OpenCode command builder, flag arity) | PASS | `go test -run 'TestBuildLaunchCommand_OpenCodeFlagArity' ./internal/agenthost/` | `ok` — value flags `--dir/--agent/--model/--session/--attach` asserted with values; boolean flags `--continue/--auto` asserted bare |
+| AC-AH-006 (no generic shell adapter) | PASS | `go test -run 'TestBuildLaunchCommand_RejectsUnknownHost' ./internal/agenthost/` | `ok` — `Host("shell")` is rejected |
+| AC-AH-009 (Codex template validity) | PASS | `go test -run 'TestCodexHooksTemplate\|TestAgentsInstruction\|TestCodexTemplateSetHasNoConfigToml' ./internal/template/` | `ok` — 10 core hook events present; `AGENTS.md` renders at project root with no unresolved variables; `.codex/config.toml` absence asserted |
+| AC-AH-010 (OpenCode template validity) | PASS | `go test -run 'TestOpenCode' ./internal/template/` | `ok` — root `opencode.json` valid JSON with `$schema` = `https://opencode.ai/config.json` and an `instructions` entry referencing `AGENTS.md`; plural `agents/` and `plugins/` paths asserted, singular forms asserted absent; plugin carries `export MOAI_HOOK_HOST=opencode` |
+| AC-AH-011 (hook truthfulness) | PASS | `go test -run 'TestMatrixFor' ./internal/agenthost/` | `ok` — every Codex mapping carries a trust-conditional degradation note naming `.codex` and trust; every non-native mapping carries a non-empty degradation note AND a non-empty per-mapping source |
+| AC-AH-012 (feature matrix coverage, 12 groups) | PASS | `go test -run 'TestFeatureMatrixFor_CoversInventory\|TestHostMatrixCmd_Features' ./internal/agenthost/ ./internal/cli/` | `ok` (both packages) — feature-group set unchanged and equal to the 12 canonical identifiers |
+| AC-AH-014 (dev-only harness exclusion) | PASS | `go test -run 'TestSplitHarness' -v ./internal/template/` | `--- PASS: TestSplitHarnessNamespaceNoLeak` with subtests `.claude`, `.codex`, `.opencode`; `--- PASS: TestSplitHarnessLeakDetectorFiresOnPlantedLeak` with 9 planted-leak subtests, proving the detector fires |
+| AC-AH-016 (full regression gate) | PASS | `go test ./...` then `GOOS=windows GOARCH=amd64 go build ./...` | test suite produced no failure lines; `WINDOWS_BUILD_EXIT=0`, `NATIVE_BUILD_EXIT=0` |
+| AC-AH-017 (`--attach` is string-valued) | PASS | `go test -v -run 'Attach' ./internal/agenthost/ ./internal/cli/` | `--- PASS: TestBuildLaunchCommand_OpenCodeAttachIsStringValued`, `--- PASS: TestOpenCodeCmd_AttachFlagIsStringValued`, `ok` in both packages. Observed RED before the fix: `--attach value = "--auto", want "http://localhost:4096" (argv=[opencode run --dir /repo --attach --auto])` |
+| AC-AH-018 (security and side-effect boundaries) | PARTIAL | `go test -run 'TestHostLaunch_DryRunDoesNotLeakEnvironment' ./internal/cli/` | `ok` — dry-run output is the argv line only; seeded `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` values and keys absent. The project-root write boundary is asserted only indirectly (no template renders outside the tree); no test yet asserts that no user-global path is written. Recorded as a gap below. |
+
+Out of scope for this milestone: AC-AH-001, AC-AH-002, AC-AH-003, AC-AH-007, AC-AH-008 (landed in the runtime slice, commit `361f8fd50`); AC-AH-013 (retired); AC-AH-015 (Phase 7, deferred to the sync phase).
+
+### Invariants
+
+| Invariant | Status | Evidence |
+|-----------|--------|----------|
+| `.codex/hooks.json.tmpl` preserved, not rewritten | PASS | not present in the diff of either milestone commit |
+| No `.agents/` work (descoped slice) | PASS | no `.agents/` path created; `git status --porcelain` shows no such entry |
+| Template neutrality (no internal development traces) | PASS | `go test ./internal/template/` includes `internal_content_leak_test.go` and `template_neutrality_audit_test.go`; both pass with the new files embedded |
+| Existing test suite not broken | PASS | `go test ./...` produced no failure lines |
+
+## §E.3 Run-phase Audit-Ready Signal
+
+```yaml
+run_complete_at: 2026-08-10
+run_commit_sha: "2d01cdf95,20e8e1a9a"
+run_status: PASS-WITH-DEBT
+ac_pass_count: 10
+ac_fail_count: 0
+ac_partial_count: 1
+preserve_list_post_run_count: 1
+l44_pre_commit_fetch: performed
+l44_post_push_fetch: pending
+new_warnings_or_lints_introduced: unverified
+cross_platform_build:
+  darwin_arm64: exit 0
+  windows_amd64: exit 0
+coverage:
+  internal_agenthost: 98.2
+  internal_template: 86.0
+  internal_cli: 72.5
+total_run_phase_files: 10
+m1_to_mN_commit_strategy: "M1 Go corrections, M2 host templates, M3 progress evidence"
+```
+
+Notes on the signal fields:
+
+- `run_status: PASS-WITH-DEBT` — all in-scope acceptance criteria pass except AC-AH-018, which is partially verified (see the gap below). No criterion failed.
+- `preserve_list_post_run_count: 1` — only `.omc/` is untracked in this worktree. The other four PRESERVE paths named in the delegation live in the main checkout, not in this isolated worktree.
+- `new_warnings_or_lints_introduced: unverified` — `golangci-lint` is not installed on this machine (`command not found`), so no lint baseline could be captured and no lint claim is made. `go vet ./internal/agenthost/ ./internal/template/ ./internal/cli/` exited 0. CI runs `golangci-lint` as an independent tier.
+- `internal_cli` coverage (72.5%) is below the 85% target. It is a large pre-existing package; this milestone added tests to it and removed none.
+
+### Gaps — explicitly not verified
+
+- `golangci-lint` was never executed (binary absent from PATH). Neither a baseline nor a post-change lint state was observed.
+- AC-AH-018's "no user-global host configuration is created or mutated" clause has no test. Nothing was observed writing to `~/.codex/` or `~/.config/opencode/`, but absence of observation is not evidence of absence.
+- The rendered OpenCode plugin was never loaded by a real `opencode` session, and no `codex` session was launched (`codex` is not installed). Host-side behavior of both adapters is unverified by execution; only render validity and static content were verified.
+- The OpenCode plugin's module contract (the exported hook shape consumed by OpenCode) is asserted only against the capability matrix's event names, not against a running OpenCode plugin loader.
+
