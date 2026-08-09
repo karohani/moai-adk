@@ -73,6 +73,119 @@ func TestMatrixFor_OpenCodeAdapterBoundaries(t *testing.T) {
 	}
 }
 
+// TestMatrixFor_CodexProjectLayerTrustDegradation covers AC-AH-011: Codex hook
+// events are delivered through the project-scoped `.codex/hooks.json`, which
+// Codex loads only when the project layer is trusted. The mapping must
+// therefore never be reported as *unconditionally* native — every mapping
+// carries a trust-conditional degradation note.
+func TestMatrixFor_CodexProjectLayerTrustDegradation(t *testing.T) {
+	matrix, err := MatrixFor(HostCodex)
+	if err != nil {
+		t.Fatalf("MatrixFor(codex): %v", err)
+	}
+
+	for _, mapping := range matrix.Mappings {
+		t.Run(string(mapping.Event), func(t *testing.T) {
+			if mapping.Degradation == "" {
+				t.Fatalf("codex %s is reported as unconditionally native: degradation note is empty", mapping.Event)
+			}
+			note := strings.ToLower(mapping.Degradation)
+			if !strings.Contains(note, "trust") {
+				t.Errorf("codex %s degradation note must state the project-layer trust condition, got %q", mapping.Event, mapping.Degradation)
+			}
+			if !strings.Contains(note, ".codex") {
+				t.Errorf("codex %s degradation note must name the project-scoped .codex layer, got %q", mapping.Event, mapping.Degradation)
+			}
+		})
+	}
+}
+
+// TestMatrixFor_NonNativeMappingsCarrySourceAndNote covers AC-AH-011: a mapping
+// whose support level is non-native must carry BOTH a non-empty degradation
+// note AND a non-empty source field. The source is the anti-overclaiming
+// mechanism and is asserted independently of the note.
+func TestMatrixFor_NonNativeMappingsCarrySourceAndNote(t *testing.T) {
+	for _, host := range Hosts() {
+		matrix, err := MatrixFor(host)
+		if err != nil {
+			t.Fatalf("MatrixFor(%s): %v", host, err)
+		}
+		for _, mapping := range matrix.Mappings {
+			if mapping.Support == SupportNative {
+				continue
+			}
+			t.Run(string(host)+"/"+string(mapping.Event), func(t *testing.T) {
+				if mapping.Degradation == "" {
+					t.Errorf("%s %s is %s but carries no degradation note", host, mapping.Event, mapping.Support)
+				}
+				if mapping.Source == "" {
+					t.Errorf("%s %s is %s but carries no source or local-evidence field", host, mapping.Event, mapping.Support)
+				}
+			})
+		}
+	}
+}
+
+// TestAllMatrices_CoversEveryHost asserts the aggregate accessors return one
+// entry per supported host, in the stable display order.
+func TestAllMatrices_CoversEveryHost(t *testing.T) {
+	hosts := Hosts()
+
+	matrices := AllMatrices()
+	if len(matrices) != len(hosts) {
+		t.Fatalf("AllMatrices() len = %d, want %d", len(matrices), len(hosts))
+	}
+	for i, matrix := range matrices {
+		if matrix.Host != hosts[i] {
+			t.Errorf("AllMatrices()[%d].Host = %q, want %q", i, matrix.Host, hosts[i])
+		}
+		if matrix.Source == "" {
+			t.Errorf("%s matrix carries no source", matrix.Host)
+		}
+	}
+
+	featureMatrices := AllFeatureMatrices()
+	if len(featureMatrices) != len(hosts) {
+		t.Fatalf("AllFeatureMatrices() len = %d, want %d", len(featureMatrices), len(hosts))
+	}
+	for i, matrix := range featureMatrices {
+		if matrix.Host != hosts[i] {
+			t.Errorf("AllFeatureMatrices()[%d].Host = %q, want %q", i, matrix.Host, hosts[i])
+		}
+	}
+}
+
+// TestMatrixFor_RejectsUnknownHost covers the error paths of both matrix
+// accessors.
+func TestMatrixFor_RejectsUnknownHost(t *testing.T) {
+	if _, err := MatrixFor(Host("shell")); err == nil {
+		t.Error("MatrixFor should reject an unsupported host")
+	}
+	if _, err := FeatureMatrixFor(Host("shell")); err == nil {
+		t.Error("FeatureMatrixFor should reject an unsupported host")
+	}
+}
+
+// TestFind_ReportsMissingEntries covers the not-found branch of both Find
+// methods.
+func TestFind_ReportsMissingEntries(t *testing.T) {
+	matrix, err := MatrixFor(HostClaude)
+	if err != nil {
+		t.Fatalf("MatrixFor(claude): %v", err)
+	}
+	if _, ok := matrix.Find(Event("NoSuchEvent")); ok {
+		t.Error("Matrix.Find should report a missing event as not found")
+	}
+
+	featureMatrix, err := FeatureMatrixFor(HostClaude)
+	if err != nil {
+		t.Fatalf("FeatureMatrixFor(claude): %v", err)
+	}
+	if _, ok := featureMatrix.Find(Feature("no_such_feature")); ok {
+		t.Error("FeatureMatrix.Find should report a missing feature as not found")
+	}
+}
+
 func TestParseHost(t *testing.T) {
 	host, err := ParseHost(" Codex ")
 	if err != nil {

@@ -30,8 +30,10 @@ type LaunchRequest struct {
 	Approval    string
 	Config      string
 	Session     string
-	Attach      bool
-	Continue    bool
+	// Attach는 실행 중인 OpenCode 서버 URL이다. `opencode run --attach`는 값을
+	// 받는 [string] 플래그이므로 bool이 아닌 문자열로 모델링한다.
+	Attach   string
+	Continue bool
 	Auto        bool
 	ExtraArgs   []string
 }
@@ -149,8 +151,8 @@ func buildOpenCodeCommand(req LaunchRequest) (LaunchCommand, error) {
 	if req.Continue {
 		argv = append(argv, "--continue")
 	}
-	if req.Attach {
-		argv = append(argv, "--attach")
+	if req.Attach != "" {
+		argv = append(argv, "--attach", req.Attach)
 	}
 	if req.Auto {
 		argv = append(argv, "--auto")

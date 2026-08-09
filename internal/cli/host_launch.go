@@ -86,7 +86,7 @@ func newOpenCodeCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flags.Model, "model", "m", "", "Override model")
 	cmd.Flags().StringVar(&flags.Session, "session", "", "OpenCode session id")
 	cmd.Flags().BoolVar(&flags.Continue, "continue", false, "Continue the last OpenCode session")
-	cmd.Flags().BoolVar(&flags.Attach, "attach", false, "Attach to a running OpenCode session")
+	cmd.Flags().StringVar(&flags.Attach, "attach", "", "Attach to a running OpenCode server URL (e.g. http://localhost:4096)")
 	cmd.Flags().BoolVar(&flags.Auto, "auto", false, "Enable OpenCode auto mode")
 	return cmd
 }
@@ -103,8 +103,9 @@ type hostLaunchFlags struct {
 	Role     string
 	Session  string
 	Continue bool
-	Attach   bool
-	Auto     bool
+	// Attach는 OpenCode 서버 URL 문자열이다 (bare boolean 플래그가 아님).
+	Attach string
+	Auto   bool
 }
 
 func launchMode(execMode bool) agenthost.LaunchMode {

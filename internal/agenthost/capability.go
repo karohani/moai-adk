@@ -157,10 +157,11 @@ func MatrixFor(host Host) (Matrix, error) {
 			},
 		}, nil
 	case HostCodex:
+		const codexSource = "https://developers.openai.com/codex/hooks"
 		return Matrix{
 			Host:   HostCodex,
-			Source: "https://developers.openai.com/codex/hooks",
-			Mappings: []Mapping{
+			Source: codexSource,
+			Mappings: withSource([]Mapping{
 				native(EventSessionStart, "SessionStart", "Codex hook event; matcher filters startup|resume|clear|compact"),
 				native(EventPreToolUse, "PreToolUse", "Codex hook event; matcher filters Bash, apply_patch/Edit/Write, and MCP tools"),
 				native(EventPermissionRequest, "PermissionRequest", "Codex hook event"),
@@ -171,13 +172,14 @@ func MatrixFor(host Host) (Matrix, error) {
 				native(EventSubagentStop, "SubagentStop", "Codex hook event; matcher filters subagent type"),
 				native(EventPreCompact, "PreCompact", "Codex hook event"),
 				native(EventPostCompact, "PostCompact", "Codex hook event"),
-			},
+			}, codexSource, codexProjectTrustDegradation),
 		}, nil
 	case HostOpenCode:
+		const openCodeSource = "https://opencode.ai/docs/plugins/"
 		return Matrix{
 			Host:   HostOpenCode,
-			Source: "https://opencode.ai/docs/plugins/",
-			Mappings: []Mapping{
+			Source: openCodeSource,
+			Mappings: withSource([]Mapping{
 				adapter(EventSessionStart, "session.created", "OpenCode plugin event", "No direct SessionStart hook payload parity; adapter must synthesize MoAI session fields."),
 				adapter(EventPreToolUse, "tool.execute.before", "OpenCode plugin event", "Use plugin mutation/throw plus OpenCode permission rules instead of Claude/Codex permissionDecision JSON."),
 				adapter(EventPermissionRequest, "permission.asked", "OpenCode plugin event", "Pair with permission.replied for observation; approval UI semantics differ."),
@@ -188,7 +190,7 @@ func MatrixFor(host Host) (Matrix, error) {
 				fallback(EventSubagentStop, "session.idle", "OpenCode session event", "Subagent stop must be inferred from child session idle/status metadata."),
 				adapter(EventPreCompact, "experimental.session.compacting", "OpenCode experimental plugin hook", "OpenCode exposes a pre-compaction mutation point under an experimental event name."),
 				adapter(EventPostCompact, "session.compacted", "OpenCode session event", "Post-compaction observation only; prompt/context mutation belongs to experimental.session.compacting."),
-			},
+			}, openCodeSource, ""),
 		}, nil
 	default:
 		return Matrix{}, fmt.Errorf("unsupported host %q", host)
@@ -304,6 +306,28 @@ func (m FeatureMatrix) Find(feature Feature) (FeatureMapping, bool) {
 		}
 	}
 	return FeatureMapping{}, false
+}
+
+// codexProjectTrustDegradation은 Codex 프로젝트 계층 신뢰 조건을 서술한다.
+// MoAI가 배치하는 Codex 훅은 프로젝트 범위 `.codex/hooks.json`에 존재하므로,
+// Codex가 해당 프로젝트 계층을 신뢰할 때에만 로드된다. 따라서 이 매핑은
+// 무조건적(unconditional) native로 보고되어서는 안 된다.
+const codexProjectTrustDegradation = "MoAI installs these hooks in the project-scoped .codex/hooks.json; Codex loads that project layer only when the project is trusted, so delivery is native but trust-conditional, not unconditional."
+
+// withSource fills the per-mapping Source field (and, when degradation is
+// non-empty, the per-mapping Degradation field) for every mapping that does not
+// already carry its own value. The per-mapping source is the anti-overclaiming
+// evidence field: it is asserted independently of the degradation note.
+func withSource(mappings []Mapping, source, degradation string) []Mapping {
+	for i := range mappings {
+		if mappings[i].Source == "" {
+			mappings[i].Source = source
+		}
+		if degradation != "" && mappings[i].Degradation == "" {
+			mappings[i].Degradation = degradation
+		}
+	}
+	return mappings
 }
 
 func native(event Event, hostEvent, notes string) Mapping {
