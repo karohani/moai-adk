@@ -1,0 +1,98 @@
+// MoAI hook adapter for OpenCode.
+//
+// OpenCode does not expose the full Claude/Codex hook event set. This plugin
+// subscribes to the OpenCode event bus and forwards the events that MoAI can
+// map onto its host-neutral hook contract.
+//
+// Support levels are not uniform. Some MoAI events map to a genuine OpenCode
+// plugin event (adapter); others are approximated from a session lifecycle
+// signal (fallback). Run `moai host matrix opencode --json` for the current
+// mapping, including the degradation note and evidence source for each entry.
+// Keep the event names below in sync with that matrix.
+
+import { spawn } from "node:child_process";
+
+// EVENT_MAP maps an OpenCode bus event name to the shared MoAI hook wrapper
+// that handles it. The wrappers are host-neutral and are also used by the
+// Claude and Codex hook surfaces, so there is one implementation per event
+// rather than one copy per host.
+const EVENT_MAP = {
+  "session.created": "handle-session-start.sh",
+  "tool.execute.before": "handle-pre-tool.sh",
+  "tool.execute.after": "handle-post-tool.sh",
+  "file.edited": "handle-post-tool.sh",
+  "permission.asked": "handle-permission-request.sh",
+  "tui.prompt.append": "handle-user-prompt-submit.sh",
+  "session.idle": "handle-stop.sh",
+  "experimental.session.compacting": "handle-compact.sh",
+  "session.compacted": "handle-post-compact.sh",
+};
+
+// COMMAND_PREFIX exports the host attribution MOAI_HOOK_HOST=opencode so a
+// wrapper can tell which host invoked it, then resolves the project root from
+// git the same way the Codex hook surface does. The wrapper name is appended
+// from EVENT_MAP only, never from event data, so nothing external reaches the
+// shell.
+const COMMAND_PREFIX =
+  'export MOAI_HOOK_HOST=opencode; ' +
+  'root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); ' +
+  'exec "$root/.claude/hooks/moai/';
+
+// TIMEOUT_MS bounds a single wrapper invocation so a slow or hanging hook
+// cannot stall the OpenCode session.
+const TIMEOUT_MS = 10000;
+
+// runHook invokes one wrapper with the event payload on stdin. Failures are
+// swallowed on purpose: a hook adapter must never break the host session. The
+// wrapper's own stderr stays visible for diagnosis.
+function runHook(cwd, script, payload) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("bash", ["-lc", COMMAND_PREFIX + script + '"'], {
+        cwd,
+        stdio: ["pipe", "ignore", "inherit"],
+        timeout: TIMEOUT_MS,
+      });
+    } catch {
+      resolve();
+      return;
+    }
+
+    child.on("error", () => resolve());
+    child.on("close", () => resolve());
+
+    try {
+      child.stdin.write(JSON.stringify(payload));
+      child.stdin.end();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export const MoaiHooks = async ({ directory }) => {
+  const root = directory || process.cwd();
+
+  return {
+    // event is the OpenCode catch-all bus subscription. Using it keeps this
+    // adapter tied to one stable surface instead of many per-event signatures.
+    event: async ({ event }) => {
+      if (!event || typeof event.type !== "string") {
+        return;
+      }
+      const script = EVENT_MAP[event.type];
+      if (!script) {
+        return;
+      }
+      await runHook(root, script, {
+        host: "opencode",
+        hook_event_name: event.type,
+        cwd: root,
+        payload: event.properties ?? null,
+      });
+    },
+  };
+};
+
+export default MoaiHooks;

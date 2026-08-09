@@ -1,0 +1,66 @@
+# AGENTS.md
+
+Shared agent instructions for this project.
+
+This file is the host-neutral instruction surface. Codex reads `AGENTS.md` for
+project instructions, and OpenCode reads the same file (falling back to
+`CLAUDE.md` when it is absent) and can also load it through the `instructions`
+key in `opencode.json`. One file serves both hosts — do not create a second
+per-host copy, or the two will drift.
+
+Claude Code reads `CLAUDE.md`. When a rule must hold for every host, state it
+here and reference this file from `CLAUDE.md` rather than duplicating it.
+
+## Project Conventions
+
+- Conversation language: {{.ConversationLanguageName}}
+- Development methodology: {{.DevelopmentMode}}
+- Specifications live under `.moai/specs/`
+- Project documentation lives under `.moai/project/`
+
+## Development Workflow
+
+This project follows a three-phase specification-driven workflow.
+
+| Phase | Purpose | Primary artifact |
+|-------|---------|------------------|
+| plan  | Capture requirements and acceptance criteria before code | `.moai/specs/<SPEC-ID>/spec.md` |
+| run   | Implement against the specification, test-first | source files plus tests |
+| sync  | Update documentation and close the specification | `CHANGELOG.md`, `README.md` |
+
+Work from the specification. When the specification is unclear or appears to
+conflict with the code, stop and report the conflict instead of guessing.
+
+## Quality Expectations
+
+- Write or update a test for every behavior change.
+- Keep the existing style of any file you modify; do not reformat unrelated code.
+- Change only what the task asks for. Leave adjacent code alone.
+- Run the project's test and lint commands before declaring work complete, and
+  report the actual command output rather than asserting success.
+
+## Language Support
+
+The toolchain detects the project language from the files present in the
+repository and runs the matching test, lint, and format commands. The following
+languages are supported equally:
+
+`go`, `python`, `typescript`, `javascript`, `rust`, `java`, `kotlin`, `csharp`,
+`ruby`, `php`, `elixir`, `cpp`, `scala`, `r`, `flutter`, `swift`
+
+A language marker that is absent simply means those checks are skipped.
+
+## Host Notes
+
+Support levels differ per host. Run `moai host matrix --json` to see the
+current event mapping, and `moai host matrix --features --json` to see the
+capability-group mapping. Each non-native mapping carries a degradation note
+explaining what is approximated and a source field recording the evidence.
+
+Hooks are wired per host:
+
+- Claude Code reads `.claude/settings.json`.
+- Codex reads `.codex/hooks.json`. Codex loads that project layer only when the
+  project is trusted, so hook delivery is native but trust-conditional.
+- OpenCode loads `.opencode/plugins/`, which forwards supported events to the
+  same shared hook scripts.
