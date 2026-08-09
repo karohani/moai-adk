@@ -95,7 +95,7 @@ The OpenCode builder owns OpenCode-specific argv generation. It should prefer:
 - `--agent` for role mapping.
 - `--model`, `--session`, `--continue`, `--attach`, `--auto` where configured.
 
-Flag arity matters here and is not uniform. `--continue` and `--auto` are boolean switches, but **`--attach` is string-valued**: `opencode run --help` types it `[string]` with the help text "attach to a running opencode server (e.g., http://localhost:4096)". A builder that models `--attach` as a boolean and emits the bare flag produces a malformed command. See AC-AH-017 for the correction obligation.
+Flag arity matters here and is not uniform. `--continue` and `--auto` are boolean switches, but **`--attach` is string-valued**: `opencode run --help` types it `[string]` with the help text "attach to a running opencode server (e.g., http://localhost:4096)". A builder that models `--attach` as a boolean and emits the bare flag produces a malformed command. See `acceptance.md` AC-AH-017 for the correction obligation.
 
 OpenCode plugin templates handle event forwarding — the plugin passes `MOAI_HOOK_HOST=opencode` to the MoAI hook CLI so downstream hook handling can attribute the event to the OpenCode host. OpenCode agent templates handle role prompts.
 

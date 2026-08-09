@@ -92,7 +92,7 @@ OpenCode official docs confirm these implementation surfaces:
 - **OpenCode natively reads Claude Code files.** Project rules fall back to `CLAUDE.md` when no `AGENTS.md` exists, and skills are read from `.claude/skills`. This is disableable via `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` (also `OPENCODE_DISABLE_CLAUDE_CODE` and `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`). This is the load-bearing reason the shared-skill mirroring slice is **not** required for OpenCode support and is deferred out of scope (`spec.md` §2.2).
   Source: https://opencode.ai/docs/
 - `opencode run` flags, confirmed against the installed binary via `opencode run --help`: `--command`, `--continue`/`-c`, `--session`/`-s`, `--fork`, `--share`, `--model`/`-m`, `--agent`, `--file`/`-f`, `--format`, `--title`, `--attach`, `--password`/`-p`, `--username`/`-u`, `--dir`, `--port`, `--variant`, `--thinking`, `--auto`, `--interactive`/`-i`.
-  **`--attach` is typed `[string]`** — its help text reads "attach to a running opencode server (e.g., http://localhost:4096)". It takes a URL **value**; it is not a boolean flag. See `spec.md` AC-AH-017 for the resulting correction obligation.
+  **`--attach` is typed `[string]`** — its help text reads "attach to a running opencode server (e.g., http://localhost:4096)". It takes a URL **value**; it is not a boolean flag. See `acceptance.md` AC-AH-017 for the resulting correction obligation.
   Local evidence: `opencode run --help` (the `opencode` binary is installed on the development machine; the `codex` binary is not, so no Codex acceptance criterion may require executing `codex`).
 
 ## 4. Planning Conclusion

@@ -255,7 +255,7 @@ The existing `.codex/hooks.json.tmpl` SHALL remain compatible with the 10 core h
 - `.opencode/plugins/moai-hooks.js` for hook/event adaptation. OpenCode plugins live in `.opencode/plugins/` (plural, project scope) and may be JavaScript or TypeScript; JavaScript is chosen so user projects need no build step. Source: https://opencode.ai/docs/plugins/
 - the shared root `AGENTS.md` instruction file (the same artifact required by REQ-AH-011 — one file, not one per host), referenced through the `instructions` config key in `opencode.json`.
 
-The OpenCode plugin SHALL forward supported events to the MoAI hook CLI with `MOAI_HOOK_HOST=opencode`.
+The OpenCode plugin SHALL forward supported events to the MoAI hook CLI with `MOAI_HOOK_HOST=opencode`. "Supported events" is defined as exactly the set of events that the hook matrix (REQ-AH-013) records for host `opencode` at support level `native` or `adapter` — that is, adapter-or-better. Events the matrix records as `fallback` or `unsupported` are not forwarded, so the forwarded set is enumerable from the matrix rather than left to implementation choice.
 
 ### REQ-AH-013: Hook Support Truthfulness
 
