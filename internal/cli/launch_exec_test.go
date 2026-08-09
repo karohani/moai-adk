@@ -37,6 +37,17 @@ func TestExecOrSpawnClaude_PosixBuildTagGate(t *testing.T) {
 		t.Errorf("launcher.go must delegate the launch to execOrSpawnClaude (REQ-CGH-001)")
 	}
 
+	hostLaunchSrc, err := os.ReadFile(filepath.Join(cliDir, "host_launch.go"))
+	if err != nil {
+		t.Fatalf("read host_launch.go: %v", err)
+	}
+	if !strings.Contains(string(hostLaunchSrc), "execOrSpawnHost(") {
+		t.Errorf("host_launch.go must delegate Codex/OpenCode launch to execOrSpawnHost")
+	}
+	if strings.Contains(string(hostLaunchSrc), "execCmd.Run()") {
+		t.Errorf("host_launch.go must not spawn-and-wait for interactive host launch")
+	}
+
 	// 2. The POSIX variant exists with the !windows build tag and the syscall.Exec call.
 	posixSrc, err := os.ReadFile(filepath.Join(cliDir, "launch_exec_posix.go"))
 	if err != nil {

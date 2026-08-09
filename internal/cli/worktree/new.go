@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/modu-ai/moai-adk/internal/agenthost"
 	"github.com/modu-ai/moai-adk/internal/bodp"
 	"github.com/modu-ai/moai-adk/internal/cli/specid"
+	"github.com/modu-ai/moai-adk/internal/config"
 	"github.com/modu-ai/moai-adk/internal/tmux"
 )
 
@@ -95,7 +98,7 @@ origin/main is safer because it always reflects the latest merged state.`,
 	// SPEC-V3R6-WORKTREE-TEAM-LAUNCH-001 M1: declare --team surface so M2 can
 	// wire dispatch and M3's tmux tests can invoke the command consistently.
 	// Dispatch logic lands in M2 (handoff_guidance.go + decidePattern wiring).
-	cmd.Flags().Bool("team", false, "Spawn a Claude/GLM session in the new worktree (P1 tmux+CG → moai glm window, P2 tmux+CC → moai cc window, P3 no-tmux → in-process, P4 no-flag → handoff guidance)")
+	cmd.Flags().Bool("team", false, "Spawn the configured coding-agent host in the new worktree (tmux window when available, in-process otherwise)")
 	// SPEC-V3R6-WORKTREE-TEAM-LAUNCH-001 M2 / R9 / OQ-2: --team subsumes tmux
 	// launching (P1/P2 paths). Combining --team with --tmux creates ambiguous
 	// intent, so cobra rejects them before any worktree-creation side-effect.
@@ -256,12 +259,15 @@ func dispatchTeamLaunch(cmd *cobra.Command, repoRoot, specID, branchName, wtPath
 	if cgMode {
 		llm = "glm"
 	}
+	role := defaultTeamLaunchRole
 	cfg := TeamLaunchConfig{
 		Pattern:      pattern,
 		WorktreePath: wtPath,
 		Branch:       branchName,
 		SpecID:       specID,
 		LLM:          llm,
+		Host:         resolveTeamLaunchHost(repoRoot, role, stderr),
+		Role:         role,
 		LaunchTime:   time.Now(),
 	}
 
@@ -283,7 +289,7 @@ func dispatchTeamLaunch(cmd *cobra.Command, repoRoot, specID, branchName, wtPath
 			WorktreePath: cfg.WorktreePath,
 			Branch:       cfg.Branch,
 			PaneID:       "", // P3 has no tmux pane
-			Mode:         patternToMode(cfg.Pattern, cfg.LLM),
+			Mode:         cfg.registryMode(),
 			CreatedAt:    time.Now().UTC(),
 			CreatedByPID: os.Getpid(),
 		}
@@ -325,7 +331,7 @@ func dispatchTeamLaunch(cmd *cobra.Command, repoRoot, specID, branchName, wtPath
 			WorktreePath: cfg.WorktreePath,
 			Branch:       cfg.Branch,
 			PaneID:       paneID,
-			Mode:         patternToMode(cfg.Pattern, cfg.LLM),
+			Mode:         cfg.registryMode(),
 			CreatedAt:    time.Now().UTC(),
 			CreatedByPID: os.Getpid(),
 		}
@@ -334,12 +340,35 @@ func dispatchTeamLaunch(cmd *cobra.Command, repoRoot, specID, branchName, wtPath
 		}
 		// Success: report the captured pane_id so the user can switch to the
 		// new window (tmux: C-b w, or use `tmux select-window -t <pane>`).
-		_, _ = fmt.Fprintf(out, "tmux window spawned in pane %s — running `moai %s` in %s\n", paneID, cfg.LLM, cfg.WorktreePath)
+		_, _ = fmt.Fprintf(out, "tmux window spawned in pane %s — running `%s` in %s\n", paneID, cfg.moaiCommand(), cfg.WorktreePath)
 		return nil
 	}
 	// Defensive: decidePattern returns one of the four constants above; an
 	// unreachable default is documented per Go style for completeness.
 	return nil
+}
+
+func resolveTeamLaunchHost(repoRoot, role string, errOut io.Writer) agenthost.Host {
+	raw := ""
+	if cfg, err := config.NewLoader().Load(filepath.Join(repoRoot, ".moai")); err == nil {
+		if role != "" {
+			if entry, ok := cfg.Workflow.Team.RoleProfiles[role]; ok {
+				raw = strings.TrimSpace(entry.Host)
+			}
+		}
+		if raw == "" {
+			raw = strings.TrimSpace(cfg.Workflow.DefaultHost)
+		}
+	}
+	if raw == "" {
+		raw = string(agenthost.HostClaude)
+	}
+	host, err := agenthost.ParseHost(raw)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "Warning: invalid workflow host %q for team launch: %v; falling back to claude\n", raw, err)
+		return agenthost.HostClaude
+	}
+	return host
 }
 
 // dirHasEntries returns true when dir exists and contains at least one entry.

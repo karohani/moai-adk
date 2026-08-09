@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modu-ai/moai-adk/internal/agenthost"
 )
 
 // TestSwarmRegistry_P1_Schema_PaneIDPopulated verifies the canonical 7-field
@@ -376,6 +378,28 @@ func TestPatternToMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := patternToMode(tt.pattern, tt.llm); got != tt.want {
 				t.Errorf("patternToMode(%v, %q) = %q, want %q", tt.pattern, tt.llm, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPatternToModeForHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern Pattern
+		host    agenthost.Host
+		llm     string
+		want    string
+	}{
+		{"P2 tmux codex", PatternP2TmuxCC, agenthost.HostCodex, "cc", "tmux-codex"},
+		{"P3 in-process opencode", PatternP3InProgress, agenthost.HostOpenCode, "cc", "in-progress-opencode"},
+		{"P1 tmux codex ignores GLM label", PatternP1TmuxGLM, agenthost.HostCodex, "glm", "tmux-codex"},
+		{"P4 handoff", PatternP4Handoff, agenthost.HostOpenCode, "cc", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := patternToModeForHost(tt.pattern, tt.host, tt.llm); got != tt.want {
+				t.Errorf("patternToModeForHost(%v, %q, %q) = %q, want %q", tt.pattern, tt.host, tt.llm, got, tt.want)
 			}
 		})
 	}

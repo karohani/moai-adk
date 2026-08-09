@@ -26,22 +26,18 @@ import (
 //
 //  1. A blank line for visual separation.
 //  2. A summary line stating the worktree is ready.
-//  3. A paste-ready command line: `cd <worktree-path> && moai <llm>`.
+//  3. A paste-ready command line: `cd <worktree-path> && <moai command>`.
 //  4. A trailing blank line.
 //
 // The function never returns an error; io.Writer failures are silently
 // dropped (consistent with fmt.Fprintln's no-error-propagation convention in
 // the rest of the worktree CLI).
 func printHandoff(out io.Writer, cfg TeamLaunchConfig) {
-	llm := cfg.LLM
-	if llm == "" {
-		llm = "cc"
-	}
 	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "Worktree ready. To start a Claude session inside it, run:")
+	_, _ = fmt.Fprintln(out, "Worktree ready. To start a coding-agent session inside it, run:")
 	_, _ = fmt.Fprintln(out, "")
 	// AC-WTL-004: stdout must contain `cd ` AND ` && moai` literals.
-	_, _ = fmt.Fprintf(out, "  cd %s && moai %s\n", cfg.WorktreePath, llm)
+	_, _ = fmt.Fprintf(out, "  cd %s && %s\n", cfg.WorktreePath, cfg.moaiCommand())
 	_, _ = fmt.Fprintln(out, "")
 }
 

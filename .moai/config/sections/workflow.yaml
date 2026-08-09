@@ -5,6 +5,7 @@ workflow:
         enabled: true
         token_threshold: 150000
     default_mode: ""
+    default_host: claude
     execution_mode: auto
     loop_prevention:
         failure_pattern_detection: true
@@ -82,42 +83,49 @@ workflow:
             analyst:
                 description: Requirements analysis and validation
                 effort: medium
+                host: claude
                 isolation: none
                 mode: plan
                 model: sonnet
             architect:
                 description: Solution design and architecture decisions (deep reasoning)
                 effort: xhigh
+                host: claude
                 isolation: none
                 mode: plan
                 model: opus
             designer:
                 description: UI/UX design with MCP design tools
                 effort: medium
+                host: claude
                 isolation: worktree
                 mode: acceptEdits
                 model: sonnet
             implementer:
                 description: Code implementation (backend, frontend, full-stack)
                 effort: xhigh
+                host: claude
                 isolation: worktree
                 mode: acceptEdits
                 model: sonnet
             researcher:
                 description: Read-only codebase exploration and analysis (speed-critical)
                 effort: low
+                host: claude
                 isolation: none
                 mode: plan
                 model: haiku
             reviewer:
                 description: Code review and quality validation (context-aware analysis)
                 effort: high
+                host: claude
                 isolation: none
                 mode: plan
                 model: sonnet
             tester:
                 description: Test creation and coverage validation
                 effort: medium
+                host: claude
                 isolation: worktree
                 mode: acceptEdits
                 model: sonnet

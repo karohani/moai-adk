@@ -10,9 +10,9 @@
 //
 // M3 implements REQ-WTL-001 (P1) and REQ-WTL-002 (P2): when --team is set
 // AND the user IS inside a tmux session, the CLI spawns a new tmux WINDOW
-// in the user's current session running `moai glm` (CG mode) or `moai cc`
-// (default), with cwd=worktree. The Go process keeps running so it can write
-// the swarm registry entry (M4) before exiting.
+// in the user's current session running the configured host command, with
+// cwd=worktree. The Go process keeps running so it can write the swarm registry
+// entry (M4) before exiting.
 //
 // The functions are split into POSIX (this file) and Windows
 // (team_launch_windows.go) variants because `syscall.Exec` is not viable on
@@ -46,9 +46,9 @@ var syscallExecFn = syscall.Exec
 var lookPathFn = exec.LookPath
 
 // launchP3 implements Pattern P3 (no-tmux in-process). On success this never
-// returns — the running Go process is replaced by `moai cc` or `moai glm`
-// running with cwd=cfg.WorktreePath. On failure it returns an error that the
-// CLI surfaces to the user.
+// returns — the running Go process is replaced by the configured host command
+// running with cwd=cfg.WorktreePath. On failure it returns an error that the CLI
+// surfaces to the user.
 //
 // Failure modes:
 //
@@ -62,7 +62,8 @@ var lookPathFn = exec.LookPath
 //     failure (success replaces the process and never returns). The
 //     captured error surfaces verbatim.
 func launchP3(cfg TeamLaunchConfig) error {
-	binPath, err := lookPathFn("moai")
+	args := cfg.moaiArgs()
+	binPath, err := lookPathFn(args[0])
 	if err != nil {
 		return fmt.Errorf("locate moai binary: %w", err)
 	}
@@ -71,11 +72,6 @@ func launchP3(cfg TeamLaunchConfig) error {
 		return fmt.Errorf("chdir to worktree %q: %w", cfg.WorktreePath, err)
 	}
 
-	llm := cfg.LLM
-	if llm == "" {
-		llm = "cc"
-	}
-	args := []string{"moai", llm}
 	env := os.Environ()
 	// On success syscall.Exec does not return — the process image is
 	// replaced. The line below is reached only when exec itself errored
@@ -129,10 +125,10 @@ func defaultTmuxNewWindow(cwd, command string) (string, error) {
 }
 
 // launchP1P2 spawns a new tmux window in the caller's current tmux session
-// with cwd set to the worktree path and command set to `moai <llm>` (either
-// `moai glm` for P1 or `moai cc` for P2). Returns the captured pane_id on
-// success — this value is propagated to the swarm registry (M4) so the
-// orchestrator can later send commands into the window.
+// with cwd set to the worktree path and command set to cfg.moaiCommand().
+// Returns the captured pane_id on success — this value is propagated to the
+// swarm registry (M4) so the orchestrator can later send commands into the
+// window.
 //
 // REQ-WTL-001 (P1): --team + tmux + CG mode → `moai glm` window.
 // REQ-WTL-002 (P2): --team + tmux + no CG mode → `moai cc` window.
@@ -151,14 +147,5 @@ func defaultTmuxNewWindow(cwd, command string) (string, error) {
 //     user interaction; the CLI returns success/failure signals via exit
 //     codes and structured stderr/stdout.
 func launchP1P2(cfg TeamLaunchConfig) (string, error) {
-	llm := cfg.LLM
-	if llm == "" {
-		// Conservative default: no LLM specified means "cc" (the cheaper /
-		// safer default). decidePattern always populates this field; the
-		// empty-string guard exists for defense-in-depth against a future
-		// caller that constructs a TeamLaunchConfig directly.
-		llm = "cc"
-	}
-	command := fmt.Sprintf("moai %s", llm)
-	return tmuxNewWindowFn(cfg.WorktreePath, command)
+	return tmuxNewWindowFn(cfg.WorktreePath, cfg.moaiCommand())
 }

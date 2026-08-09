@@ -87,6 +87,21 @@ func schemaKeyToTUIField(schemaKey, locale string) (tuiLabel, bool) {
 	if fn, ok := schemaSegmentBridge[schemaKey]; ok {
 		return tuiLabel{Title: fn(t)}, true
 	}
+	if label, ok := genericSchemaFieldLabel(schemaKey); ok {
+		return label, true
+	}
+	return tuiLabel{}, false
+}
+
+func genericSchemaFieldLabel(schemaKey string) (tuiLabel, bool) {
+	for _, f := range settings.AllFields() {
+		if f.I18nKey == schemaKey {
+			return tuiLabel{
+				Title: f.Name,
+				Desc:  "Configure " + f.Name + ".",
+			}, true
+		}
+	}
 	return tuiLabel{}, false
 }
 

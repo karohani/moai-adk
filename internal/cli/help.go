@@ -42,6 +42,8 @@ func rootHelpGroups() []helpGroup {
 			title: "Launchers",
 			rows: [][2]string{
 				{"moai cc", "Run Claude Code (with bridge)"},
+				{"moai codex", "Run Codex CLI"},
+				{"moai opencode", "Run OpenCode CLI"},
 				{"moai cg", "Claude + GLM hybrid mode"},
 				{"moai glm", "Run Claude Code with GLM backend"},
 				{"moai web", "Launch browser-based settings console"},

@@ -21,12 +21,16 @@ func newHostCmd() *cobra.Command {
 
 func newHostMatrixCmd() *cobra.Command {
 	var outputJSON bool
+	var outputFeatures bool
 
 	cmd := &cobra.Command{
 		Use:   "matrix [host]",
-		Short: "Show MoAI hook compatibility for Claude, Codex, and OpenCode",
+		Short: "Show MoAI host compatibility for Claude, Codex, and OpenCode",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputFeatures {
+				return runHostFeatureMatrix(cmd, args, outputJSON)
+			}
 			var matrices []agenthost.Matrix
 			if len(args) == 0 {
 				matrices = agenthost.AllMatrices()
@@ -52,7 +56,33 @@ func newHostMatrixCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON")
+	cmd.Flags().BoolVar(&outputFeatures, "features", false, "Show feature compatibility instead of hook event compatibility")
 	return cmd
+}
+
+func runHostFeatureMatrix(cmd *cobra.Command, args []string, outputJSON bool) error {
+	var matrices []agenthost.FeatureMatrix
+	if len(args) == 0 {
+		matrices = agenthost.AllFeatureMatrices()
+	} else {
+		host, err := agenthost.ParseHost(args[0])
+		if err != nil {
+			return err
+		}
+		matrix, err := agenthost.FeatureMatrixFor(host)
+		if err != nil {
+			return err
+		}
+		matrices = []agenthost.FeatureMatrix{matrix}
+	}
+
+	if outputJSON {
+		encoder := json.NewEncoder(cmd.OutOrStdout())
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(matrices)
+	}
+	writeHostFeatureMatrix(cmd, matrices)
+	return nil
 }
 
 func writeHostMatrix(cmd *cobra.Command, matrices []agenthost.Matrix) {
@@ -73,6 +103,30 @@ func writeHostMatrix(cmd *cobra.Command, matrices []agenthost.Matrix) {
 				mapping.Event,
 				mapping.Support,
 				mapping.HostEvent,
+				degradation,
+			)
+		}
+	}
+}
+
+func writeHostFeatureMatrix(cmd *cobra.Command, matrices []agenthost.FeatureMatrix) {
+	out := cmd.OutOrStdout()
+	for i, matrix := range matrices {
+		if i > 0 {
+			_, _ = fmt.Fprintln(out)
+		}
+		_, _ = fmt.Fprintf(out, "Host: %s\n", matrix.Host)
+		_, _ = fmt.Fprintf(out, "Source: %s\n", matrix.Source)
+		_, _ = fmt.Fprintln(out, "Feature\tSupport\tSurface\tDegradation")
+		for _, mapping := range matrix.Features {
+			degradation := mapping.Degradation
+			if degradation == "" {
+				degradation = "-"
+			}
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\n",
+				mapping.Feature,
+				mapping.Support,
+				mapping.Surface,
 				degradation,
 			)
 		}

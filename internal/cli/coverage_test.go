@@ -58,24 +58,41 @@ func TestRunHookEvent_ReadInputError(t *testing.T) {
 	origDeps := deps
 	defer func() { deps = origDeps }()
 
+	writeCalled := false
+	dispatchCalled := false
 	deps = &Dependencies{
 		HookProtocol: &mockHookProtocol{
 			readInputFunc: func(_ io.Reader) (*hook.HookInput, error) {
 				return nil, errors.New("invalid JSON")
 			},
+			writeOutputFunc: func(_ io.Writer, output *hook.HookOutput) error {
+				writeCalled = true
+				if output == nil {
+					t.Error("default hook output should not be nil")
+				}
+				return nil
+			},
 		},
-		HookRegistry: &mockHookRegistry{},
+		HookRegistry: &mockHookRegistry{
+			dispatchFunc: func(_ context.Context, _ hook.EventType, _ *hook.HookInput) (*hook.HookOutput, error) {
+				dispatchCalled = true
+				return hook.NewAllowOutput(), nil
+			},
+		},
 	}
 
 	for _, cmd := range hookCmd.Commands() {
 		if cmd.Name() == "post-tool" {
 			cmd.SetContext(context.Background())
 			err := cmd.RunE(cmd, []string{})
-			if err == nil {
-				t.Error("should error on ReadInput failure")
+			if err != nil {
+				t.Fatalf("RunE should degrade malformed hook input to default output, got %v", err)
 			}
-			if !strings.Contains(err.Error(), "read hook input") {
-				t.Errorf("error should mention read hook input, got %v", err)
+			if !writeCalled {
+				t.Error("ReadInput failure should emit default hook output")
+			}
+			if dispatchCalled {
+				t.Error("ReadInput failure should not dispatch handlers")
 			}
 			return
 		}

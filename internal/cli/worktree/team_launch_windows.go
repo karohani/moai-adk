@@ -25,7 +25,7 @@ import (
 // exits 0 (worktree creation already succeeded).
 //
 // @MX:NOTE Windows P3 fallback per REQ-WTL-012. Not a setup error — the
-// user can still paste the printed `cd … && moai cc` command in a fresh
+// user can still paste the printed `cd … && <moai command>` command in a fresh
 // terminal.
 func launchP3(cfg TeamLaunchConfig) error {
 	printHandoffWithError(

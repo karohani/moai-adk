@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/modu-ai/moai-adk/internal/agenthost"
 )
 
 // TestLaunchP3_CapturesArgvAndCwd_CC verifies P3 (no-tmux) dispatch performs:
@@ -135,6 +137,42 @@ func TestLaunchP3_CapturesArgvAndCwd_GLM(t *testing.T) {
 		t.Fatalf("launchP3 returned unexpected error: %v", err)
 	}
 	if want := []string{"moai", "glm"}; !equalStringSlices(capturedArgs, want) {
+		t.Errorf("captured argv = %v, want %v", capturedArgs, want)
+	}
+}
+
+func TestLaunchP3_CapturesArgvAndCwd_OpenCodeHost(t *testing.T) {
+	origExec := syscallExecFn
+	origLookPath := lookPathFn
+	origCwd, _ := os.Getwd()
+	defer func() {
+		syscallExecFn = origExec
+		lookPathFn = origLookPath
+		_ = os.Chdir(origCwd)
+	}()
+
+	lookPathFn = func(name string) (string, error) {
+		if name != "moai" {
+			return "", os.ErrNotExist
+		}
+		return "/fake/bin/moai", nil
+	}
+	var capturedArgs []string
+	syscallExecFn = func(bin string, args []string, env []string) error {
+		capturedArgs = args
+		return nil
+	}
+
+	cfg := TeamLaunchConfig{
+		Pattern:      PatternP3InProgress,
+		WorktreePath: t.TempDir(),
+		Host:         agenthost.HostOpenCode,
+		Role:         "implementer",
+	}
+	if err := launchP3(cfg); err != nil {
+		t.Fatalf("launchP3 returned unexpected error: %v", err)
+	}
+	if want := []string{"moai", "opencode", "--role", "implementer"}; !equalStringSlices(capturedArgs, want) {
 		t.Errorf("captured argv = %v, want %v", capturedArgs, want)
 	}
 }
@@ -310,6 +348,31 @@ func TestLaunchP2_NoCG_TmuxCCWindow(t *testing.T) {
 	}
 	if strings.Contains(capturedCommand, "moai glm") {
 		t.Errorf("captured command = %q must NOT contain %q", capturedCommand, "moai glm")
+	}
+}
+
+func TestLaunchP1P2_CodexHostWindow(t *testing.T) {
+	origFn := tmuxNewWindowFn
+	defer func() { tmuxNewWindowFn = origFn }()
+
+	var capturedCommand string
+	tmuxNewWindowFn = func(cwd, command string) (string, error) {
+		capturedCommand = command
+		return "%8", nil
+	}
+
+	cfg := TeamLaunchConfig{
+		Pattern:      PatternP2TmuxCC,
+		WorktreePath: t.TempDir(),
+		SpecID:       "SPEC-WTL-CODEX-001",
+		Host:         agenthost.HostCodex,
+		Role:         "implementer",
+	}
+	if _, err := launchP1P2(cfg); err != nil {
+		t.Fatalf("launchP1P2 returned unexpected error: %v", err)
+	}
+	if capturedCommand != "moai codex" {
+		t.Errorf("captured command = %q, want %q", capturedCommand, "moai codex")
 	}
 }
 
@@ -704,6 +767,70 @@ func TestDispatchTeamLaunch_P2_WritesRegistry(t *testing.T) {
 	}
 	if entry.PaneID != "%7" {
 		t.Errorf("PaneID = %q, want %q", entry.PaneID, "%7")
+	}
+}
+
+func TestDispatchTeamLaunch_RoleHostOpenCode_WritesRegistry(t *testing.T) {
+	origFn := tmuxNewWindowFn
+	defer func() { tmuxNewWindowFn = origFn }()
+
+	var capturedCommand string
+	tmuxNewWindowFn = func(cwd, command string) (string, error) {
+		capturedCommand = command
+		return "%13", nil
+	}
+	t.Setenv("TMUX", "/tmp/tmux-fake/default,42,0")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+
+	repoRoot := t.TempDir()
+	workflowDir := filepath.Join(repoRoot, ".moai", "config", "sections")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir workflow dir: %v", err)
+	}
+	workflow := []byte(`workflow:
+  default_host: claude
+  team:
+    role_profiles:
+      implementer:
+        mode: acceptEdits
+        model: sonnet
+        host: opencode
+        isolation: worktree
+        description: Implementation
+`)
+	if err := os.WriteFile(filepath.Join(workflowDir, "workflow.yaml"), workflow, 0o644); err != nil {
+		t.Fatalf("write workflow.yaml: %v", err)
+	}
+
+	wtPath := t.TempDir()
+	specID := "SPEC-WTL-HOST-001"
+	branch := "feature/" + specID
+
+	cmd, outBuf, _ := newDispatchCmd(t, true)
+	if err := dispatchTeamLaunch(cmd, repoRoot, specID, branch, wtPath); err != nil {
+		t.Fatalf("dispatchTeamLaunch returned unexpected error: %v", err)
+	}
+	if capturedCommand != "moai opencode --role implementer" {
+		t.Fatalf("captured command = %q, want OpenCode role launch", capturedCommand)
+	}
+	if !strings.Contains(outBuf.String(), "moai opencode --role implementer") {
+		t.Fatalf("stdout should report OpenCode command, got:\n%s", outBuf.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".moai", "state", "swarm", specID+".json"))
+	if err != nil {
+		t.Fatalf("read registry file: %v", err)
+	}
+	var entry SwarmEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("unmarshal registry JSON: %v", err)
+	}
+	if entry.Mode != "tmux-opencode" {
+		t.Fatalf("Mode = %q, want tmux-opencode", entry.Mode)
+	}
+	if entry.PaneID != "%13" {
+		t.Fatalf("PaneID = %q, want %%13", entry.PaneID)
 	}
 }
 

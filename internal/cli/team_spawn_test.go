@@ -687,6 +687,7 @@ workflow:
       implementer:
         mode: acceptEdits
         model: sonnet
+        host: codex
         isolation: worktree
         description: Implementation
       tester:
@@ -702,6 +703,7 @@ workflow:
       reviewer:
         mode: plan
         model: haiku
+        host: opencode
         isolation: none
         description: Code review
 `
@@ -751,6 +753,9 @@ workflow:
 		if implementer.Mode != "acceptEdits" {
 			t.Errorf("implementer mode = %q, want %q", implementer.Mode, "acceptEdits")
 		}
+		if implementer.Host != "codex" {
+			t.Errorf("implementer host = %q, want %q", implementer.Host, "codex")
+		}
 	}
 
 	// Verify tester is write-heavy.
@@ -767,5 +772,72 @@ workflow:
 		t.Error("designer profile not found")
 	} else if !designer.WriteHeavy {
 		t.Error("designer should be write-heavy")
+	}
+
+	reviewer, exists := profiles["reviewer"]
+	if !exists {
+		t.Error("reviewer profile not found")
+	} else if reviewer.Host != "opencode" {
+		t.Errorf("reviewer host = %q, want %q", reviewer.Host, "opencode")
+	}
+}
+
+func TestLoadRoleProfiles_DefaultHostFallback(t *testing.T) {
+	tempDir := t.TempDir()
+	sectionsDir := filepath.Join(tempDir, ".moai", "config", "sections")
+	if err := os.MkdirAll(sectionsDir, 0755); err != nil {
+		t.Fatalf("mkdir sections: %v", err)
+	}
+	workflowPath := filepath.Join(sectionsDir, "workflow.yaml")
+	workflowContent := `
+workflow:
+  default_host: codex
+  team:
+    role_profiles:
+      implementer:
+        mode: acceptEdits
+        model: sonnet
+        isolation: worktree
+        description: Implementation
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowContent), 0644); err != nil {
+		t.Fatalf("write workflow.yaml: %v", err)
+	}
+
+	profiles, err := LoadRoleProfiles(workflowPath)
+	if err != nil {
+		t.Fatalf("LoadRoleProfiles() error: %v", err)
+	}
+	if profiles["implementer"].Host != "codex" {
+		t.Fatalf("implementer host = %q, want codex", profiles["implementer"].Host)
+	}
+}
+
+func TestLoadRoleProfiles_RejectsUnknownHost(t *testing.T) {
+	tempDir := t.TempDir()
+	sectionsDir := filepath.Join(tempDir, ".moai", "config", "sections")
+	if err := os.MkdirAll(sectionsDir, 0755); err != nil {
+		t.Fatalf("mkdir sections: %v", err)
+	}
+	workflowPath := filepath.Join(sectionsDir, "workflow.yaml")
+	workflowContent := `
+workflow:
+  team:
+    role_profiles:
+      implementer:
+        mode: acceptEdits
+        model: sonnet
+        host: shell
+        isolation: worktree
+        description: Implementation
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowContent), 0644); err != nil {
+		t.Fatalf("write workflow.yaml: %v", err)
+	}
+
+	if _, err := LoadRoleProfiles(workflowPath); err == nil {
+		t.Fatal("LoadRoleProfiles should reject unknown host")
+	} else if !strings.Contains(err.Error(), "claude, codex, opencode") {
+		t.Fatalf("error = %v, want supported host list", err)
 	}
 }

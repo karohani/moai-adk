@@ -86,3 +86,61 @@ func TestParseHost(t *testing.T) {
 		t.Fatal("ParseHost should reject unknown host")
 	}
 }
+
+func TestFeatureMatrixFor_CoversInventory(t *testing.T) {
+	wantFeatures := Features()
+	for _, host := range Hosts() {
+		matrix, err := FeatureMatrixFor(host)
+		if err != nil {
+			t.Fatalf("FeatureMatrixFor(%s): %v", host, err)
+		}
+		if matrix.Host != host {
+			t.Fatalf("matrix host = %q, want %q", matrix.Host, host)
+		}
+		if len(matrix.Features) != len(wantFeatures) {
+			t.Fatalf("%s feature count = %d, want %d", host, len(matrix.Features), len(wantFeatures))
+		}
+		for _, feature := range wantFeatures {
+			mapping, ok := matrix.Find(feature)
+			if !ok {
+				t.Fatalf("%s feature matrix missing %s", host, feature)
+			}
+			if mapping.Support == "" {
+				t.Errorf("%s %s support should not be empty", host, feature)
+			}
+			if mapping.Surface == "" {
+				t.Errorf("%s %s surface should not be empty", host, feature)
+			}
+			if mapping.Support != SupportNative && mapping.Degradation == "" {
+				t.Errorf("%s %s should explain non-native degradation", host, feature)
+			}
+		}
+	}
+}
+
+func TestFeatureMatrixFor_OpenCodeBoundaries(t *testing.T) {
+	matrix, err := FeatureMatrixFor(HostOpenCode)
+	if err != nil {
+		t.Fatalf("FeatureMatrixFor(opencode): %v", err)
+	}
+
+	cases := []struct {
+		feature Feature
+		want    SupportLevel
+	}{
+		{FeatureLauncherRuntime, SupportNative},
+		{FeatureRoleProfiles, SupportNative},
+		{FeatureHooks, SupportAdapter},
+		{FeatureSlashWorkflows, SupportFallback},
+		{FeatureStateSession, SupportFallback},
+	}
+	for _, tc := range cases {
+		mapping, ok := matrix.Find(tc.feature)
+		if !ok {
+			t.Fatalf("opencode feature matrix missing %s", tc.feature)
+		}
+		if mapping.Support != tc.want {
+			t.Errorf("opencode %s support = %s, want %s", tc.feature, mapping.Support, tc.want)
+		}
+	}
+}

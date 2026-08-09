@@ -317,6 +317,7 @@ type WorkflowConfig struct {
 	// Nested canonical fields (yaml-aligned with workflow.yaml top-level keys).
 	AutoClear      AutoClearConfig        `yaml:"auto_clear"`
 	DefaultMode    string                 `yaml:"default_mode"`
+	DefaultHost    string                 `yaml:"default_host"`
 	ExecutionMode  string                 `yaml:"execution_mode"`
 	LoopPrevention LoopPreventionConfig   `yaml:"loop_prevention"`
 	Team           TeamConfig             `yaml:"team"`
@@ -390,6 +391,7 @@ type TeamConfig struct {
 // RoleProfileEntry mirrors a single workflow.team.role_profiles.<name> entry.
 type RoleProfileEntry struct {
 	Description string `yaml:"description"`
+	Host        string `yaml:"host"`
 	Isolation   string `yaml:"isolation"`
 	Mode        string `yaml:"mode"`
 	Model       string `yaml:"model"`

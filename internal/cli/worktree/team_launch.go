@@ -5,14 +5,21 @@
 
 package worktree
 
-import "time"
+import (
+	"strings"
+	"time"
+
+	"github.com/modu-ai/moai-adk/internal/agenthost"
+)
+
+const defaultTeamLaunchRole = "implementer"
 
 // Pattern enumerates the four canonical team-launch dispatch patterns.
 //
 //	P4Handoff       — no --team flag; print handoff guidance only.
 //	P3InProgress    — --team + not in tmux; syscall.Exec the LLM in-process.
-//	P2TmuxCC        — --team + in tmux + not CG mode; open `moai cc` window.
-//	P1TmuxGLM       — --team + in tmux + CG mode; open `moai glm` window.
+//	P2TmuxCC        — --team + in tmux + not CG mode; open configured host window.
+//	P1TmuxGLM       — --team + in tmux + CG mode; open configured host window.
 //
 // Decision matrix is implemented in decidePattern. The default zero-value is
 // PatternP4Handoff so an uninitialized TeamLaunchConfig defaults to the
@@ -29,11 +36,11 @@ const (
 	PatternP3InProgress
 
 	// PatternP2TmuxCC is the in-tmux, non-CG launch path. A new tmux window is
-	// spawned in the user's current session running `moai cc`.
+	// spawned in the user's current session running the configured host command.
 	PatternP2TmuxCC
 
 	// PatternP1TmuxGLM is the in-tmux, CG-mode launch path. A new tmux window
-	// is spawned in the user's current session running `moai glm`.
+	// is spawned in the user's current session running the configured host command.
 	PatternP1TmuxGLM
 )
 
@@ -81,14 +88,54 @@ func decidePattern(teamFlag, inTmux, cgMode bool) Pattern {
 // through to the M2+ dispatch functions. Fields are populated by runNew after
 // worktree creation succeeds.
 //
-// LLM is "glm" for PatternP1TmuxGLM and "cc" otherwise. LaunchTime is the
-// monotonic timestamp captured at dispatch — used by swarm registry entries
-// (M4 REQ-WTL-008).
+// Host/Role determine the concrete `moai ...` command. LLM remains the
+// Claude/GLM label for the legacy Claude host. LaunchTime is the monotonic
+// timestamp captured at dispatch — used by swarm registry entries (M4
+// REQ-WTL-008).
 type TeamLaunchConfig struct {
 	Pattern      Pattern
 	WorktreePath string
 	Branch       string
 	SpecID       string
 	LLM          string // "glm" or "cc"
+	Host         agenthost.Host
+	Role         string
 	LaunchTime   time.Time
+}
+
+func (cfg TeamLaunchConfig) normalizedHost() agenthost.Host {
+	if cfg.Host == "" {
+		return agenthost.HostClaude
+	}
+	return cfg.Host
+}
+
+func (cfg TeamLaunchConfig) normalizedLLM() string {
+	if cfg.LLM == "" {
+		return "cc"
+	}
+	return cfg.LLM
+}
+
+func (cfg TeamLaunchConfig) moaiArgs() []string {
+	switch cfg.normalizedHost() {
+	case agenthost.HostCodex:
+		return []string{"moai", "codex"}
+	case agenthost.HostOpenCode:
+		args := []string{"moai", "opencode"}
+		if cfg.Role != "" {
+			args = append(args, "--role", cfg.Role)
+		}
+		return args
+	default:
+		return []string{"moai", cfg.normalizedLLM()}
+	}
+}
+
+func (cfg TeamLaunchConfig) moaiCommand() string {
+	return strings.Join(cfg.moaiArgs(), " ")
+}
+
+func (cfg TeamLaunchConfig) registryMode() string {
+	return patternToModeForHost(cfg.Pattern, cfg.normalizedHost(), cfg.normalizedLLM())
 }

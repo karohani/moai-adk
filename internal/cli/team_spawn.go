@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modu-ai/moai-adk/internal/agenthost"
 	"github.com/modu-ai/moai-adk/internal/config"
 )
 
@@ -55,6 +56,7 @@ type TeamTaskEntry struct {
 // RoleProfile represents a validated role profile from workflow.yaml.
 type RoleProfile struct {
 	Name        string
+	Host        agenthost.Host
 	Mode        string // plan|acceptEdits
 	Model       string // haiku|sonnet|opus
 	Isolation   string // none|worktree
@@ -256,6 +258,7 @@ func InitTeamState(stateDir, teamID string, profiles map[string]RoleProfile) err
 		fmt.Fprintf(&configBuf, "  %s:\n", name)
 		fmt.Fprintf(&configBuf, "    mode: %s\n", profile.Mode)
 		fmt.Fprintf(&configBuf, "    model: %s\n", profile.Model)
+		fmt.Fprintf(&configBuf, "    host: %s\n", profile.Host)
 		fmt.Fprintf(&configBuf, "    isolation: %s\n", profile.Isolation)
 		fmt.Fprintf(&configBuf, "    write_heavy: %t\n", profile.WriteHeavy)
 		fmt.Fprintf(&configBuf, "    description: %s\n", profile.Description)
@@ -434,8 +437,13 @@ func LoadRoleProfiles(workflowPath string) (map[string]RoleProfile, error) {
 	writeHeavySet := buildWriteHeavySet()
 	profiles := make(map[string]RoleProfile, len(entries))
 	for name, entry := range entries {
+		host, err := resolveRoleHost(name, cfg.Workflow.DefaultHost, entry.Host)
+		if err != nil {
+			return nil, err
+		}
 		profiles[name] = RoleProfile{
 			Name:        name,
+			Host:        host,
 			Mode:        entry.Mode,
 			Model:       entry.Model,
 			Isolation:   entry.Isolation,
@@ -445,6 +453,21 @@ func LoadRoleProfiles(workflowPath string) (map[string]RoleProfile, error) {
 	}
 
 	return profiles, nil
+}
+
+func resolveRoleHost(role, defaultHost, roleHost string) (agenthost.Host, error) {
+	raw := strings.TrimSpace(roleHost)
+	if raw == "" {
+		raw = strings.TrimSpace(defaultHost)
+	}
+	if raw == "" {
+		raw = string(agenthost.HostClaude)
+	}
+	host, err := agenthost.ParseHost(raw)
+	if err != nil {
+		return "", fmt.Errorf("workflow.team.role_profiles.%s.host: %w", role, err)
+	}
+	return host, nil
 }
 
 // buildWriteHeavySet expands the WriteHeavyRoles CSV constant into a lookup set.

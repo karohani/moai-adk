@@ -319,6 +319,7 @@ func TestWorkflowConfigNestedFieldReachability(t *testing.T) {
 		{wfType, []string{"AutoClear", "AfterRun"}},
 		{wfType, []string{"AutoClear", "TokenThreshold"}},
 		{wfType, []string{"DefaultMode"}},
+		{wfType, []string{"DefaultHost"}},
 		{wfType, []string{"ExecutionMode"}},
 		{wfType, []string{"LoopPrevention", "FailurePatternDetection"}},
 		{wfType, []string{"LoopPrevention", "MaxIterations"}},
@@ -382,6 +383,7 @@ func TestTeamConfigStructShape(t *testing.T) {
 
 	wantEntryFields := map[string]bool{
 		"Description": true,
+		"Host":        true,
 		"Isolation":   true,
 		"Mode":        true,
 		"Model":       true,

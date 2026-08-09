@@ -4,6 +4,7 @@ workflow:
     # Precedence: CLI --mode flag > this field > harness auto.
     # @MX:WARN - Default mode field is utility-skill-only consumer. @MX:REASON - Field is read by run skill dispatcher; changing semantics without updating dispatcher breaks behavior contract.
     default_mode: ""
+    default_host: claude
     auto_clear:
         after_plan: true
         after_run: false
@@ -41,42 +42,49 @@ workflow:
                 mode: plan
                 effort: low
                 model: haiku
+                host: claude
                 isolation: none
                 description: "Read-only codebase exploration and analysis"
             analyst:
                 mode: plan
                 effort: medium
                 model: sonnet
+                host: claude
                 isolation: none
                 description: "Requirements analysis and validation"
             architect:
                 mode: plan
                 effort: xhigh
                 model: sonnet
+                host: claude
                 isolation: none
                 description: "Solution design and architecture decisions"
             implementer:
                 mode: acceptEdits
                 effort: xhigh
                 model: sonnet
+                host: claude
                 isolation: worktree
                 description: "Code implementation (backend, frontend, full-stack)"
             tester:
                 mode: acceptEdits
                 effort: medium
                 model: sonnet
+                host: claude
                 isolation: worktree
                 description: "Test creation and coverage validation"
             designer:
                 mode: acceptEdits
                 effort: medium
                 model: sonnet
+                host: claude
                 isolation: worktree
                 description: "UI/UX design with MCP design tools"
             reviewer:
                 mode: plan
                 effort: high
                 model: haiku
+                host: claude
                 isolation: none
                 description: "Code review and quality validation"
         patterns:

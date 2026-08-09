@@ -61,7 +61,7 @@ func TestRootCmd_HelpOutput(t *testing.T) {
 	}
 
 	// Verify core subcommands are listed in help output
-	requiredCommands := []string{"moai version", "moai init", "moai doctor", "moai status"}
+	requiredCommands := []string{"moai version", "moai init", "moai doctor", "moai status", "moai codex", "moai opencode"}
 	for _, cmd := range requiredCommands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("root --help should list %q subcommand", cmd)

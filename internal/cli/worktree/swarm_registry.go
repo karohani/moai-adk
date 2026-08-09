@@ -23,6 +23,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/modu-ai/moai-adk/internal/agenthost"
 )
 
 // SwarmEntry captures the per-SPEC active session state written to
@@ -40,7 +42,7 @@ type SwarmEntry struct {
 	WorktreePath string    `json:"worktree_path"`
 	Branch       string    `json:"branch"`
 	PaneID       string    `json:"pane_id"`        // empty for P3; populated for P1/P2
-	Mode         string    `json:"mode"`           // "tmux-glm" | "tmux-cc" | "in-progress-glm" | "in-progress-cc"
+	Mode         string    `json:"mode"`           // e.g. "tmux-glm", "tmux-codex", "in-progress-opencode"
 	CreatedAt    time.Time `json:"created_at"`     // RFC3339 UTC
 	CreatedByPID int       `json:"created_by_pid"` // os.Getpid() at write time
 }
@@ -93,10 +95,10 @@ func WriteSwarmEntry(repoRoot string, entry SwarmEntry) error {
 	return nil
 }
 
-// patternToMode maps a Pattern + LLM string into the canonical
-// SwarmEntry.Mode value. P4Handoff returns the empty string because the P4
-// path never writes a registry entry (no spawn occurs); callers MUST
-// short-circuit on PatternP4Handoff before invoking this function.
+// patternToMode maps a Pattern + LLM string into the canonical Claude/GLM
+// SwarmEntry.Mode value. P4Handoff returns the empty string because the P4 path
+// never writes a registry entry (no spawn occurs); callers MUST short-circuit on
+// PatternP4Handoff before invoking this function.
 //
 // The mapping table:
 //
@@ -106,6 +108,20 @@ func WriteSwarmEntry(repoRoot string, entry SwarmEntry) error {
 //	PatternP3InProgress + llm="cc"  → "in-progress-cc"
 //	PatternP4Handoff   → "" (no registry written; defensive return)
 func patternToMode(p Pattern, llm string) string {
+	return patternToModeForHost(p, agenthost.HostClaude, llm)
+}
+
+func patternToModeForHost(p Pattern, host agenthost.Host, llm string) string {
+	if host != "" && host != agenthost.HostClaude {
+		switch p {
+		case PatternP1TmuxGLM, PatternP2TmuxCC:
+			return "tmux-" + string(host)
+		case PatternP3InProgress:
+			return "in-progress-" + string(host)
+		default:
+			return ""
+		}
+	}
 	switch p {
 	case PatternP1TmuxGLM:
 		return "tmux-glm"

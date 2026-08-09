@@ -356,24 +356,41 @@ func TestRunAgentHook_ReadInputError(t *testing.T) {
 	origDeps := deps
 	defer func() { deps = origDeps }()
 
+	writeCalled := false
+	dispatchCalled := false
 	deps = &Dependencies{
 		HookProtocol: &mockHookProtocol{
 			readInputFunc: func(_ io.Reader) (*hook.HookInput, error) {
 				return nil, io.ErrUnexpectedEOF
 			},
+			writeOutputFunc: func(_ io.Writer, output *hook.HookOutput) error {
+				writeCalled = true
+				if output == nil {
+					t.Error("default agent hook output should not be nil")
+				}
+				return nil
+			},
 		},
-		HookRegistry: &mockHookRegistry{},
+		HookRegistry: &mockHookRegistry{
+			dispatchFunc: func(_ context.Context, _ hook.EventType, _ *hook.HookInput) (*hook.HookOutput, error) {
+				dispatchCalled = true
+				return hook.NewAllowOutput(), nil
+			},
+		},
 	}
 
 	for _, cmd := range hookCmd.Commands() {
 		if cmd.Name() == "agent" {
 			cmd.SetContext(context.Background())
 			err := cmd.RunE(cmd, []string{"test-validation"})
-			if err == nil {
-				t.Error("should error on ReadInput failure")
+			if err != nil {
+				t.Fatalf("RunE should degrade malformed agent hook input to default output, got %v", err)
 			}
-			if !strings.Contains(err.Error(), "read hook input") {
-				t.Errorf("error should mention read hook input, got %v", err)
+			if !writeCalled {
+				t.Error("ReadInput failure should emit default agent hook output")
+			}
+			if dispatchCalled {
+				t.Error("ReadInput failure should not dispatch agent hook handlers")
 			}
 			return
 		}
