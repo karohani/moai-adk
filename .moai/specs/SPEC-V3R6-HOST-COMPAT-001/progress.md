@@ -134,9 +134,9 @@ Every row below records a command that was actually run in this milestone and th
 | AC-AH-009 (Codex template validity) | PASS | `go test -run 'TestCodexHooksTemplate\|TestAgentsInstruction\|TestCodexTemplateSetHasNoConfigToml' ./internal/template/` | `ok` — 10 core hook events present; `AGENTS.md` renders at project root with no unresolved variables; `.codex/config.toml` absence asserted |
 | AC-AH-010 (OpenCode template validity) | PASS | `go test -run 'TestOpenCode' ./internal/template/` | `ok` — root `opencode.json` valid JSON with `$schema` = `https://opencode.ai/config.json` and an `instructions` entry referencing `AGENTS.md`; plural `agents/` and `plugins/` paths asserted, singular forms asserted absent; plugin carries `export MOAI_HOOK_HOST=opencode` |
 | AC-AH-011 (hook truthfulness) | PASS | `go test -run 'TestMatrixFor' ./internal/agenthost/` | `ok` — every Codex mapping carries a trust-conditional degradation note naming `.codex` and trust; every non-native mapping carries a non-empty degradation note AND a non-empty per-mapping source |
-| AC-AH-012 (feature matrix coverage, 12 groups) | PASS | `go test -run 'TestFeatureMatrixFor_CoversInventory\|TestHostMatrixCmd_Features' ./internal/agenthost/ ./internal/cli/` | `ok` (both packages) — feature-group set unchanged and equal to the 12 canonical identifiers |
-| AC-AH-014 (dev-only harness exclusion) | PASS | `go test -run 'TestSplitHarness' -v ./internal/template/` | `--- PASS: TestSplitHarnessNamespaceNoLeak` with subtests `.claude`, `.codex`, `.opencode`; `--- PASS: TestSplitHarnessLeakDetectorFiresOnPlantedLeak` with 9 planted-leak subtests, proving the detector fires |
-| AC-AH-016 (full regression gate) | PASS | `go test ./...` then `GOOS=windows GOARCH=amd64 go build ./...` | test suite produced no failure lines; `WINDOWS_BUILD_EXIT=0`, `NATIVE_BUILD_EXIT=0` |
+| AC-AH-012 (feature matrix coverage, 12 groups) | PASS | `go test -v -run 'TestHostMatrixCmd_FeatureGroupSetIsExact' ./internal/cli/` | `--- PASS: TestHostMatrixCmd_FeatureGroupSetIsExact`, `ok`. The pre-existing tests only asserted count-equality against `agenthost.Features()`, which is circular — it passes regardless of how the constants are renamed. This milestone adds a set-equality assertion against the 12 identifiers spelled out as string literals (including the `/` in `launcher/runtime`), applied to every host, failing on both a missing and an extra identifier. |
+| AC-AH-014 (dev-only harness exclusion) | PASS | `go test -run 'TestSplitHarness' -v ./internal/template/` | Re-run against the final tree after `make build`: `--- PASS: TestSplitHarnessNamespaceNoLeak` (subtests `.claude`, `.codex`, `.opencode`), `--- PASS: TestSplitHarnessLeakDetectorFiresOnPlantedLeak` (9 planted-leak subtests, proving the detector fires), `ok` |
+| AC-AH-016 (full regression gate) | PASS | `go test ./...` then `GOOS=windows GOARCH=amd64 go build ./...` and `go build ./...` | Re-run against the final tree: the suite emitted no failure lines; `WIN=0`, `NATIVE=0` |
 | AC-AH-017 (`--attach` is string-valued) | PASS | `go test -v -run 'Attach' ./internal/agenthost/ ./internal/cli/` | `--- PASS: TestBuildLaunchCommand_OpenCodeAttachIsStringValued`, `--- PASS: TestOpenCodeCmd_AttachFlagIsStringValued`, `ok` in both packages. Observed RED before the fix: `--attach value = "--auto", want "http://localhost:4096" (argv=[opencode run --dir /repo --attach --auto])` |
 | AC-AH-018 (security and side-effect boundaries) | PARTIAL | `go test -run 'TestHostLaunch_DryRunDoesNotLeakEnvironment' ./internal/cli/` | `ok` — dry-run output is the argv line only; seeded `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` values and keys absent. The project-root write boundary is asserted only indirectly (no template renders outside the tree); no test yet asserts that no user-global path is written. Recorded as a gap below. |
 
@@ -155,7 +155,7 @@ Out of scope for this milestone: AC-AH-001, AC-AH-002, AC-AH-003, AC-AH-007, AC-
 
 ```yaml
 run_complete_at: 2026-08-10
-run_commit_sha: "2d01cdf95,20e8e1a9a"
+run_commit_sha: "2d01cdf95,20e8e1a9a,f6cc79f63,M4-pending-backfill"
 run_status: PASS-WITH-DEBT
 ac_pass_count: 10
 ac_fail_count: 0
@@ -171,8 +171,8 @@ coverage:
   internal_agenthost: 98.2
   internal_template: 86.0
   internal_cli: 72.5
-total_run_phase_files: 10
-m1_to_mN_commit_strategy: "M1 Go corrections, M2 host templates, M3 progress evidence"
+total_run_phase_files: 11
+m1_to_mN_commit_strategy: "M1 Go corrections, M2 host templates, M3 progress evidence, M4 AC-AH-012 set-equality test + evidence-row corrections"
 ```
 
 Notes on the signal fields:
@@ -188,4 +188,22 @@ Notes on the signal fields:
 - AC-AH-018's "no user-global host configuration is created or mutated" clause has no test. Nothing was observed writing to `~/.codex/` or `~/.config/opencode/`, but absence of observation is not evidence of absence.
 - The rendered OpenCode plugin was never loaded by a real `opencode` session, and no `codex` session was launched (`codex` is not installed). Host-side behavior of both adapters is unverified by execution; only render validity and static content were verified.
 - The OpenCode plugin's module contract (the exported hook shape consumed by OpenCode) is asserted only against the capability matrix's event names, not against a running OpenCode plugin loader.
+
+### Test-ordering disclosure
+
+TDD ordering was not uniform across this milestone, and the difference is recorded rather than smoothed over:
+
+- **RED-first, with an observed runtime failure**: AC-AH-017 (`--attach value = "--auto", want "http://localhost:4096"`) and AC-AH-011 (`codex SessionStart is reported as unconditionally native: degradation note is empty`, plus 9 OpenCode `carries no source` failures). Both are real defects; the failing assertion was observed before the fix.
+- **Test-after**: the four new template files (`AGENTS.md.tmpl`, `opencode.json.tmpl`, and the two `.opencode/` files) were authored before their render-validity tests, and the AC-AH-012 set-equality test was added after the identifiers already existed. These are specification tests over new artifacts rather than fixes for observed defects, so no RED state preceded them.
+
+### Trackability evidence
+
+`git check-ignore --no-index -v` was run once per created file. Each produced no output and exited 1 — no ignore rule matched any of the four paths, so all four are trackable:
+
+- `internal/template/templates/AGENTS.md.tmpl` — no output, exit 1
+- `internal/template/templates/opencode.json.tmpl` — no output, exit 1
+- `internal/template/templates/.opencode/agents/moai-reviewer.md.tmpl` — no output, exit 1
+- `internal/template/templates/.opencode/plugins/moai-hooks.js.tmpl` — no output, exit 1
+
+`git add` accepted all four without `--force`, which independently confirms they are not ignored.
 
