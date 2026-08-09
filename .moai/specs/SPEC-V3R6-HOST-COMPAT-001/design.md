@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.1.0"
+version: "0.2.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-08-09
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -95,26 +95,36 @@ The OpenCode builder owns OpenCode-specific argv generation. It should prefer:
 - `--agent` for role mapping.
 - `--model`, `--session`, `--continue`, `--attach`, `--auto` where configured.
 
-OpenCode plugin templates handle event forwarding. OpenCode agent templates handle role prompts.
+Flag arity matters here and is not uniform. `--continue` and `--auto` are boolean switches, but **`--attach` is string-valued**: `opencode run --help` types it `[string]` with the help text "attach to a running opencode server (e.g., http://localhost:4096)". A builder that models `--attach` as a boolean and emits the bare flag produces a malformed command. See AC-AH-017 for the correction obligation.
+
+OpenCode plugin templates handle event forwarding — the plugin passes `MOAI_HOOK_HOST=opencode` to the MoAI hook CLI so downstream hook handling can attribute the event to the OpenCode host. OpenCode agent templates handle role prompts.
 
 ## 4. Template Strategy
 
-Canonical skill source:
+### 4.1 Shared skill source — DEFERRED (not part of this SPEC)
+
+An earlier revision of this section declared `.agents/skills/` the canonical cross-host skill source with `.claude/skills` / `.codex/skills` copy-or-symlink mirrors. **That strategy is deferred out of scope** (REQ-AH-010 removed; see `spec.md` §2.2 → "Out of Scope — Shared-skill canonicalisation"). No canonical source is designated, no mirror is generated, and no `copy` vs `symlink` policy is contracted by this SPEC.
+
+Two facts make the deferral safe rather than merely postponed:
+
+- Existing `.claude/skills` behavior is preserved exactly as-is — nothing about Claude skill distribution changes.
+- OpenCode reads Claude Code skills natively from `.claude/skills` (opt-out `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`; broader opt-outs `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`). Source: https://opencode.ai/docs/ — so OpenCode receives MoAI skills without any mirroring work.
+
+The deferred follow-up SPEC owns the open questions this section previously left uncontracted: the config key name and its YAML location, its enum values, its default, and the Windows symlink fallback behavior.
+
+### 4.2 Host template surfaces in scope
 
 ```text
-.agents/skills/
-```
-
-Host mirrors:
-
-```text
-.claude/skills/        copy or symlink
-.codex/skills/         copy or symlink when enabled
-.opencode/agent/       generated agent wrappers
+.codex/hooks.json      Codex hook adapter (existing template)
+AGENTS.md              shared instruction file — read by BOTH Codex and OpenCode
+opencode.json          OpenCode config, PROJECT ROOT (not .opencode/opencode.json)
+.opencode/agents/      generated agent wrappers (canonical PLURAL directory name)
 .opencode/plugins/     event adapter plugin
 ```
 
-The default policy should be conservative. If symlink behavior is unreliable on a platform, use copy mode and expose a clear diagnostic.
+`AGENTS.md` is deliberately a single root file rather than a per-host pair: Codex reads `AGENTS.md` for project instructions, and OpenCode reads the same file (falling back to `CLAUDE.md` when it is absent) while also accepting it through the `instructions` config key. Duplicating it per host would create two sources of truth for one contract.
+
+The `.opencode/` subdirectory names are **plural** per the OpenCode docs (`agents/`, `commands/`, `modes/`, `plugins/`, `skills/`, `tools/`, `themes/`); singular forms such as `agent/` exist only for backwards compatibility and are not used here.
 
 ## 5. Compatibility Contracts
 

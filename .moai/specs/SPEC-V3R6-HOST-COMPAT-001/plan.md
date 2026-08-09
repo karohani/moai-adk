@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.1.0"
+version: "0.2.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-08-09
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -22,17 +22,22 @@ This SPEC turns the current Claude-first MoAI runtime into a host-aware runtime.
 
 ## A.1 Decomposition Boundary
 
-This SPEC is the umbrella compatibility spine. The implementation can still be sliced into smaller delivery branches:
+This SPEC is the umbrella compatibility spine. The implementation is sliced into delivery units:
 
-- Runtime slice: host schema, command builders, `moai codex`, `moai opencode`, and tmux role delegation.
-- Extension slice: Codex templates, OpenCode config/plugin/agent templates, and feature matrix expansion.
-- Shared-skill slice: `.agents/skills` copy/symlink migration. This slice should remain optional until ownership and update semantics are reviewed.
+- **Runtime slice** (Phases 0-4, 6) — host schema, command builders, `moai codex`, `moai opencode`, tmux role delegation, and the feature matrix. Covers REQ-AH-001..REQ-AH-009, REQ-AH-013, REQ-AH-016.
+- **Extension slice** (Phase 5) — Codex templates and OpenCode config/plugin/agent templates. Covers REQ-AH-011, REQ-AH-012, REQ-AH-015.
+- **Documentation slice** (Phase 7) — deferred to the sync phase. Covers REQ-AH-004 (documentation clause) and REQ-AH-015 honesty obligations.
+- ~~Shared-skill slice: `.agents/skills` copy/symlink migration.~~ **REMOVED FROM SCOPE.** The ownership and update-semantics review this slice was gated on has not happened, and OpenCode reads `.claude/skills` natively so the mirroring is not load-bearing. REQ-AH-010 and AC-AH-013 are retired; see `spec.md` §2.2 → "Out of Scope — Shared-skill canonicalisation". `.agents/` is left untouched and `.gitignore` is not modified.
 
-The runtime slice should land first. OpenCode templates are required for native support, but they should not block the initial command-builder contract if review pressure is high.
+The runtime slice landed first. The remaining milestone is **Phase 5 plus the Phase 6 remainder**; Phase 7 is deferred to the sync phase.
 
 ## B. Phase Plan
 
-### Phase 0: Baseline Lock
+> **Traceability convention.** Every phase below carries a `Covers:` line naming the `REQ-AH-xxx` requirements it implements and the `AC-AH-xxx` criteria that verify it. Phases 0-4 and 6 are landed (commit `361f8fd50`); Phase 5 is the open milestone; Phase 7 is deferred to the sync phase.
+
+### Phase 0: Baseline Lock — LANDED
+
+Covers: (no REQ — regression baseline for all phases). Verified by: AC-AH-016.
 
 Goal: prevent regressions while host support is added.
 
@@ -49,7 +54,9 @@ Suggested checks:
 go test ./internal/agenthost ./internal/cli ./internal/template
 ```
 
-### Phase 1: Host Schema and Resolver
+### Phase 1: Host Schema and Resolver — LANDED
+
+Covers: REQ-AH-001 (host registry), REQ-AH-003 (YAML host precedence), REQ-AH-004 (role-split config pattern), REQ-AH-016 (backward-compatible migration). Verified by: AC-AH-001, AC-AH-002, AC-AH-003.
 
 Files:
 
@@ -75,7 +82,11 @@ Tests:
 - missing host falls back to current behavior
 - unknown host fails
 
-### Phase 2: Structured Command Builders
+### Phase 2: Structured Command Builders — LANDED (one correction outstanding)
+
+Covers: REQ-AH-005 (structured argv builders), REQ-AH-006 (Codex builder), REQ-AH-007 (OpenCode builder). Verified by: AC-AH-004, AC-AH-005, AC-AH-006, AC-AH-017.
+
+Outstanding correction (AC-AH-017): `buildOpenCodeCommand` in `internal/agenthost/command.go` models `--attach` as a boolean and emits the bare flag with no value, and `hostLaunchFlags.Attach` in `internal/cli/host_launch.go` declares it `bool`. `opencode run --attach` takes a string URL value, so the builder can emit a malformed command. This is corrected as part of the Phase 5 milestone because AC-AH-005 and AC-AH-017 are re-tightened at the same time.
 
 New or changed files:
 
@@ -101,7 +112,9 @@ Tests:
 - OpenCode agent/model/session flags render correctly
 - missing required fields fail before execution
 
-### Phase 3: Native CLI Launchers
+### Phase 3: Native CLI Launchers — LANDED
+
+Covers: REQ-AH-008 (native launcher routing + missing-binary failure before session mutation), REQ-AH-018 (security and side-effect boundaries on the launch path). Verified by: AC-AH-007, AC-AH-018.
 
 Files:
 
@@ -126,7 +139,9 @@ Tests:
 - `moai opencode --dry-run` prints OpenCode command
 - existing launcher tests remain green
 
-### Phase 4: Tmux and Worktree Role Delegation
+### Phase 4: Tmux and Worktree Role Delegation — LANDED
+
+Covers: REQ-AH-009 (tmux role delegation through command builders, with `cc/glm/cg` backward compatibility). Verified by: AC-AH-008.
 
 Files:
 
@@ -149,34 +164,67 @@ Tests:
 - reviewer -> OpenCode command
 - CG compatibility still launches GLM where configured
 
-### Phase 5: Templates and Shared Skills
+### Phase 5: Host Templates — OPEN (this is the milestone)
 
-Files:
+Covers: REQ-AH-011 (Codex templates), REQ-AH-012 (OpenCode templates and plugin), REQ-AH-015 (dev-only harness boundary), REQ-AH-018 (project-root write boundary). Verified by: AC-AH-009, AC-AH-010, AC-AH-014, AC-AH-018. Also delivers the AC-AH-017 `--attach` correction carried over from Phase 2.
 
-- `internal/template/templates/.codex/hooks.json.tmpl`
-- new Codex config/instruction templates as selected by implementation
-- new `internal/template/templates/opencode.json.tmpl` or `.opencode/opencode.json.tmpl`
-- new `internal/template/templates/.opencode/agent/*.md.tmpl`
-- new `internal/template/templates/.opencode/plugins/moai.*.tmpl`
-- template installer tests
+#### Exact file list
 
-Tasks:
+There is no "as selected by implementation" latitude and no wildcard in this list. Phase 5 creates or modifies **exactly** these files:
 
-- Formalize `.agents/skills` as canonical shared skill source.
-- Add `copy` vs `symlink` policy.
-- Ensure Claude existing `.claude/skills` behavior is preserved.
-- Install Codex hooks/config/instructions.
-- Install OpenCode config/agents/plugin/instructions.
-- Mark dev-only harness commands as not distributed.
+| # | Path | Status | Purpose |
+|---|------|--------|---------|
+| 1 | `internal/template/templates/.codex/hooks.json.tmpl` | EXISTS — keep, do not rewrite | Codex hook adapter. Already at a correct discovery path (`<repo>/.codex/hooks.json`). |
+| 2 | `internal/template/templates/AGENTS.md.tmpl` | NEW | Shared instruction file, rendered to project-root `AGENTS.md`. **One file serves both hosts** — Codex reads `AGENTS.md` for project instructions, and OpenCode reads the same file (falling back to `CLAUDE.md` when absent) and can also load it via the `instructions` config key. Do NOT create a second per-host instruction template. |
+| 3 | `internal/template/templates/opencode.json.tmpl` | NEW | OpenCode config, rendered to **project-root** `opencode.json`. Declares `"$schema": "https://opencode.ai/config.json"` and an `instructions` entry pointing at `AGENTS.md`. |
+| 4 | `internal/template/templates/.opencode/agents/moai-reviewer.md.tmpl` | NEW | OpenCode agent wrapper for the `reviewer` role. Directory name is the canonical **plural** `agents`. |
+| 5 | `internal/template/templates/.opencode/plugins/moai-hooks.js.tmpl` | NEW | OpenCode event-adapter plugin. Forwards supported events to the MoAI hook CLI with `MOAI_HOOK_HOST=opencode`. |
+| 6 | `internal/template/split_namespace_test.go` | MODIFY | Extend the existing unconditional guard to the new `.codex/` and `.opencode/` trees (see AC-AH-014). |
+| 7 | template installer / render tests under `internal/template/` | NEW | Render-validity tests for files 1-5. |
 
-Tests:
+Enumeration rules, so the list stays derivable rather than arbitrary:
 
-- rendered Codex hooks JSON is valid
-- rendered OpenCode JSON is valid
-- symlink/copy policy produces expected paths
-- update preserves user-owned harness artifacts
+- **Agent wrappers (file 4):** one wrapper per role that REQ-AH-004's recommended split assigns to `opencode`. That split assigns exactly one — `reviewer`. No `moai-plan` agent is created: the recommended split routes planning to Claude, so an OpenCode planning agent would contradict the SPEC's own configuration.
+- **Plugin extension (file 5):** OpenCode plugins may be JavaScript or TypeScript. JavaScript is chosen so user projects need no build step to load the plugin.
+- **No `config.toml`:** no `internal/template/templates/.codex/config.toml.tmpl` is created. See `spec.md` §2.2 → "Out of Scope — Codex `config.toml` project template".
 
-### Phase 6: Host Matrix Expansion
+#### `git check-ignore` verification of every named path
+
+`.gitignore:125-129` ignores `.codex/`, `.agents/`, and `AGENTS.md`, then re-includes the template `.codex/` subtree via two negations. Because `git check-ignore`'s exit status is not a reliable ignore signal when the matching rule is a negation, each path was checked with `--no-index -v` and the matched pattern inspected — a leading `!` means the path is trackable. Result (verified 2026-08-09):
+
+| Path | Matched pattern | Trackable? |
+|------|-----------------|-----------|
+| `internal/template/templates/.codex/hooks.json.tmpl` | `.gitignore:129:!internal/template/templates/.codex/**` | YES (negated) |
+| `internal/template/templates/AGENTS.md.tmpl` | (no match) | YES |
+| `internal/template/templates/opencode.json.tmpl` | (no match) | YES |
+| `internal/template/templates/.opencode/agents/moai-reviewer.md.tmpl` | (no match) | YES |
+| `internal/template/templates/.opencode/plugins/moai-hooks.js.tmpl` | (no match) | YES |
+
+The `AGENTS.md` ignore rule matches the **basename** `AGENTS.md`, so a bare root `AGENTS.md` is ignored but the template source `AGENTS.md.tmpl` is not — this is why file 2 is named with the `.tmpl` suffix and is safe to commit. By contrast `internal/template/templates/.agents/skills/...` **is** ignored (`.gitignore:126:.agents/`, no negation exists for it), which independently confirms the shared-skill slice could not ship today even if it were in scope.
+
+#### Tasks
+
+- Create files 2-5 above. (REQ-AH-011, REQ-AH-012)
+- Wire `opencode.json.tmpl`'s `instructions` key to the rendered `AGENTS.md`. (REQ-AH-012)
+- Emit `MOAI_HOOK_HOST=opencode` from the plugin's event forwarding. (REQ-AH-012)
+- Extend `TestSplitHarnessNamespaceNoLeak` to walk `.codex` and `.opencode` in addition to `.claude`. (REQ-AH-015)
+- Correct `--attach` from boolean to string-valued in `internal/agenthost/command.go` and `internal/cli/host_launch.go`. (REQ-AH-007)
+- Confirm all template writes land under the project root; no user-global path is written. (REQ-AH-018)
+- Preserve existing `.claude/skills` behavior unchanged. No `.agents/` work — that slice is out of scope.
+
+#### Tests
+
+- rendered `.codex/hooks.json` is valid JSON and carries the 10 core host-neutral hook events (AC-AH-009)
+- rendered root `opencode.json` is valid JSON, carries the `$schema` URL, and the agent + plugin templates render with no unresolved variables (AC-AH-010)
+- the plugin template contains the `MOAI_HOOK_HOST=opencode` forwarding literal (AC-AH-010)
+- the extended namespace guard still passes and now covers `.codex/` and `.opencode/` (AC-AH-014)
+- `--attach` renders as `--attach <value>` and a bare `--attach` is rejected (AC-AH-017)
+
+> No acceptance criterion in this phase may require executing the `codex` binary — it is not installed on the development machine. All Codex verification is template-render and JSON-validity based. (`opencode` is installed, but tests still must not launch a real session per `spec.md` §2.2.)
+
+### Phase 6: Host Matrix Expansion — LANDED (degradation-note remainder open)
+
+Covers: REQ-AH-002 (12 feature groups), REQ-AH-013 (hook support truthfulness, including the Codex project-layer trust degradation note). Verified by: AC-AH-011, AC-AH-012.
 
 Files:
 
@@ -194,11 +242,15 @@ Tasks:
 
 Tests:
 
-- Codex reports native for core hooks supported by current template contract
-- OpenCode reports adapter/fallback where applicable
-- Feature groups include all 12 inventory groups from the research doc
+- Codex reports native for core hooks supported by the current template contract, and the project-scoped `.codex/hooks.json` mapping carries the trust-conditional degradation note (AC-AH-011)
+- OpenCode reports adapter/fallback where applicable, and every non-native mapping carries both a degradation note and a source URL or local evidence (AC-AH-011)
+- Feature groups equal exactly the 12 groups defined in `spec.md` REQ-AH-002, compared as a set against the serialized identifiers (AC-AH-012)
 
-### Phase 7: Documentation and Reports
+> Corrected premise: an earlier revision of this task read "all 12 inventory groups **from the research doc**". That was false — `research.md` §1 previously enumerated 9 prose bullets, not 12. The authoritative source is `spec.md` REQ-AH-002 (12 groups with serialized identifiers); `research.md` §1 has since been amended to match it row-for-row.
+
+### Phase 7: Documentation and Reports — DEFERRED to the sync phase
+
+Covers: REQ-AH-004 (documenting the recommended role split as the starting point), REQ-AH-013 / REQ-AH-015 honesty obligations in user-facing docs. Verified by: AC-AH-015.
 
 Files:
 
@@ -209,21 +261,25 @@ Files:
 
 Tasks:
 
-- Update product positioning from Claude-only to host-aware, while preserving Claude-first history.
-- Document recommended role split: Claude planning, Codex implementation, OpenCode reviewer/native alternative.
-- Document exact unsupported cases.
-- Add migration notes for existing projects.
+- Update product positioning from Claude-only to host-aware, while preserving Claude-first history. (REQ-AH-004)
+- Document the recommended role split — Claude planning, Codex implementation, OpenCode reviewer/native alternative — explicitly as the recommended starting point. (REQ-AH-004, AC-AH-015)
+- Document exact unsupported cases, distinguishing native / adapter / fallback / unsupported without overstating parity. (REQ-AH-013, AC-AH-015)
+- Document the four scope exclusions recorded in `spec.md` §2.2 so users are not left expecting shared-skill canonicalisation, a Codex `config.toml`, a host diagnostic command, or per-workflow host classification. (REQ-AH-015)
+- Add migration notes for existing projects. (REQ-AH-016)
 
 ## C. Risk Register
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Overclaiming OpenCode parity | user confusion | support levels must distinguish native, adapter, fallback, unsupported |
-| Breaking existing Claude workflows | high | preserve default host fallback to Claude and keep cc/glm/cg tests green |
-| Symlink portability issues | medium | config-controlled `copy` vs `symlink`; default can remain copy if safer |
-| Hook event mismatch | medium | feature matrix and hook matrix remain separate |
-| Shell quoting bugs | high | structured argv builders and tests |
-| Dev-only harness leakage | medium | template installer tests must assert dev-only commands are excluded |
+| Risk | Impact | Mitigation | Bound by |
+|------|--------|------------|----------|
+| Overclaiming OpenCode parity | user confusion | support levels must distinguish native, adapter, fallback, unsupported | REQ-AH-013 / AC-AH-011 |
+| Overclaiming Codex hook parity — project `.codex/` hooks load only when the project layer is trusted | user sees a hook silently not fire | the mapping carries a trust-conditional degradation note; it is never reported as unconditionally native | REQ-AH-013 / AC-AH-011 |
+| Breaking existing Claude workflows | high | preserve default host fallback to Claude and keep cc/glm/cg tests green | REQ-AH-016 / AC-AH-001 |
+| Hook event mismatch | medium | feature matrix and hook matrix remain separate | REQ-AH-002 / AC-AH-012 |
+| Shell quoting bugs | high | structured argv builders and tests | REQ-AH-005 / AC-AH-004, AC-AH-005 |
+| Malformed argv from a value-taking flag emitted bare (`--attach`) | medium — command fails at the host | ACs assert flag **and value** together, not flag presence alone | REQ-AH-007 / AC-AH-005, AC-AH-017 |
+| Dev-only harness leakage into the new `.codex/` + `.opencode/` trees | medium | extend the existing unconditional static guard rather than adding a second, flag-gated one | REQ-AH-015 / AC-AH-014 |
+| Wrong OpenCode config path or singular directory name silently produces a non-loading artifact that still renders cleanly | high — passes render tests while being inert | path and directory names pinned from the live docs and asserted literally in the AC, not left to implementation choice | REQ-AH-012 / AC-AH-010 |
+| ~~Symlink portability issues~~ | n/a | ~~config-controlled `copy` vs `symlink`~~ — risk withdrawn: the shared-skill slice is out of scope, so no symlink is created | REQ-AH-010 removed |
 
 ## D. Verification Plan
 
