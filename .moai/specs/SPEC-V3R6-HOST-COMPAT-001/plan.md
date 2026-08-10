@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.2.0"
+version: "0.3.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-08-09
+updated: 2026-08-10
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -82,18 +82,15 @@ Tests:
 - missing host falls back to current behavior
 - unknown host fails
 
-### Phase 2: Structured Command Builders — LANDED (one correction outstanding)
+### Phase 2: Structured Command Builders — LANDED (correction applied)
 
 Covers: REQ-AH-005 (structured argv builders), REQ-AH-006 (Codex builder), REQ-AH-007 (OpenCode builder). Verified by: AC-AH-004, AC-AH-005, AC-AH-006, AC-AH-017.
 
-Outstanding correction (AC-AH-017): `buildOpenCodeCommand` in `internal/agenthost/command.go` models `--attach` as a boolean and emits the bare flag with no value, and `hostLaunchFlags.Attach` in `internal/cli/host_launch.go` declares it `bool`. `opencode run --attach` takes a string URL value, so the builder can emit a malformed command. This is corrected as part of the Phase 5 milestone because AC-AH-005 and AC-AH-017 are re-tightened at the same time.
+Correction applied (AC-AH-017), commit `2d01cdf95`: `buildOpenCodeCommand` in `internal/agenthost/command.go` previously modelled `--attach` as a boolean and emitted the bare flag with no value, and `hostLaunchFlags.Attach` in `internal/cli/host_launch.go` declared it `bool`. Because `opencode run --attach` takes a string URL value, that builder could emit a malformed command. `LaunchRequest.Attach` is now `string` and the builder emits the `--attach <url>` pair; the CLI flag is now `StringVar`. This correction landed with the Phase 5 milestone because AC-AH-005 and AC-AH-017 were re-tightened at the same time.
 
-New or changed files:
+New or changed files — the implementation consolidated all three builders into one file rather than splitting them per host, so this list names what actually landed:
 
-- `internal/agenthost/command.go`
-- `internal/agenthost/command_claude.go`
-- `internal/agenthost/command_codex.go`
-- `internal/agenthost/command_opencode.go`
+- `internal/agenthost/command.go` — all three host builders (Claude, Codex, OpenCode) plus `LaunchRequest` / `LaunchCommand` / `LaunchMode`
 - `internal/agenthost/command_test.go`
 
 Tasks:
@@ -116,12 +113,12 @@ Tests:
 
 Covers: REQ-AH-008 (native launcher routing + missing-binary failure before session mutation), REQ-AH-018 (security and side-effect boundaries on the launch path). Verified by: AC-AH-007, AC-AH-018.
 
-Files:
+Files — both launchers were implemented in a single shared file rather than one file per host, so this list names what actually landed:
 
+- `internal/cli/host_launch.go` — new; carries both the `moai codex` and `moai opencode` launchers and the shared `hostLaunchFlags`
+- `internal/cli/host_launch_test.go` — new
 - `internal/cli/launcher.go`
 - `internal/cli/cc.go`
-- new `internal/cli/codex.go`
-- new `internal/cli/opencode.go`
 - `internal/cli/root.go`
 
 Tasks:
@@ -214,7 +211,7 @@ The `AGENTS.md` ignore rule matches the **basename** `AGENTS.md`, so a bare root
 
 #### Tests
 
-- rendered `.codex/hooks.json` is valid JSON and carries the 10 core host-neutral hook events (AC-AH-009)
+- rendered `.codex/hooks.json` is valid JSON and carries the 10 core host-neutral hook events, enumerated in `spec.md` REQ-AH-011 (AC-AH-009)
 - rendered root `opencode.json` is valid JSON, carries the `$schema` URL, and the agent + plugin templates render with no unresolved variables (AC-AH-010)
 - the plugin template contains the `MOAI_HOOK_HOST=opencode` forwarding literal (AC-AH-010)
 - the extended namespace guard still passes and now covers `.codex/` and `.opencode/` (AC-AH-014)

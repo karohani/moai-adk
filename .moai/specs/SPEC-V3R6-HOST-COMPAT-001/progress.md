@@ -1,7 +1,7 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.2.0"
+version: "0.3.0"
 status: in-progress
 created: 2026-07-05
 updated: 2026-08-10
@@ -85,6 +85,8 @@ Conditions (c) and (d) each independently force the explicit-gate branch, so the
 |------|-------|---------|
 | 2026-08-09 | plan-auditor iteration 1 | **FAIL**, overall 0.50 vs Tier L threshold 0.85 (Clarity 0.50 / Completeness 0.70 / Testability 0.50 / Traceability 0.40). All four must-pass criteria passed; the failure was threshold-driven. Report: `.moai/reports/plan-audit/SPEC-V3R6-HOST-COMPAT-001-2026-08-09.md`. |
 | 2026-08-09 | manager-spec amendment (v0.2.0) | Artifacts amended across `spec.md`, `plan.md`, `acceptance.md`, `research.md`, `design.md`, `spec-compact.md`. Awaiting re-audit. |
+| 2026-08-09 | plan-auditor iteration 2 | **PASS**, overall 0.873 vs Tier L threshold 0.85 (Clarity 0.85 / Completeness 0.85 / Testability 0.85 / Traceability 0.95). Delta vs iter-1 +0.373, monotonic increase. Residual defects logged N1-N7. Report iter-2 section: `.moai/reports/plan-audit/SPEC-V3R6-HOST-COMPAT-001-2026-08-09.md` L251-543. |
+| 2026-08-10 | manager-spec post-implementation correction (v0.3.0) | Resolved N1-N6 against the landed implementation at `20f5dd60a`, deliberately deferred until after Phase 5 so file lists could be written from the real tree rather than plan-phase predictions. N1: Phase 2/3 file lists corrected to `internal/agenthost/command.go` + `internal/cli/host_launch.go` (five never-created files removed); Phase 2 heading changed from "one correction outstanding" to "correction applied" with commit `2d01cdf95`. N2: the 10 hook events enumerated in `spec.md` REQ-AH-011 and AC-AH-009 clause 1 re-anchored as a set-equality assertion. N3: `spec.md` §2.3 Deferred Backlog created as the single named tracking location; all five unanchored "follow-up SPEC" references re-pointed to entries D-1/D-2/D-3. N4: Arity column added to AC-AH-004. N5: omitted-flag escape clause added to AC-AH-005. N6: `design.md` §2 reconciled against the actual `LaunchRequest` / `LaunchCommand` / `LaunchMode` structs. N7 (progress.md `§E.2`-`§E.4` headings) is not owned by manager-spec and was left untouched. |
 
 Amendment summary (v0.1.0 → v0.2.0):
 

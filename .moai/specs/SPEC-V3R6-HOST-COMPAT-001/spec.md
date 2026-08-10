@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.2.0"
+version: "0.3.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-08-09
+updated: 2026-08-10
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -62,7 +62,7 @@ The core user scenario is: a project YAML can say which host owns each role, tmu
 
 ### Out of Scope — Shared-skill canonicalisation (REQ-AH-010, AC-AH-013 removed)
 
-- `.agents/skills` is NOT formalized as the canonical cross-host skill source by this SPEC. REQ-AH-010 and AC-AH-013 are removed from scope and deferred to a follow-up SPEC.
+- `.agents/skills` is NOT formalized as the canonical cross-host skill source by this SPEC. REQ-AH-010 and AC-AH-013 are removed from scope and recorded in §2.3 Deferred Backlog → entry D-1.
 - Rationale 1: `plan.md` §A.1 already classified this slice as optional pending an ownership and update-semantics review. That review has not happened, so the config key, its default, and the Windows symlink fallback remain uncontracted.
 - Rationale 2: the mirroring is not load-bearing for OpenCode. OpenCode reads Claude Code skills natively from `.claude/skills` (opt-out via `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`; the broader opt-outs are `OPENCODE_DISABLE_CLAUDE_CODE` and `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`). Source: https://opencode.ai/docs/
 - Consequence: `.agents/` is left untouched by this SPEC — no template tree entry, no `.gitignore` change, no copy/symlink policy. Existing `.claude/skills` behavior is preserved unchanged.
@@ -83,7 +83,31 @@ The core user scenario is: a project YAML can say which host owns each role, tmu
 
 - The 13 `/moai` workflows are NOT individually classified as native / shared-instruction / fallback / unsupported by this SPEC.
 - Rationale: the feature-surface matrix delivered under REQ-AH-002 already carries a `slash_workflows` group at feature-group granularity. Per-workflow granularity is a different axis and would re-open the completed Phase 6 matrix work.
-- Deferred to the same follow-up SPEC that resumes host-coverage documentation.
+- Recorded in §2.3 Deferred Backlog → entry D-2, together with the host-coverage documentation axis it shares a pickup trigger with.
+
+### 2.3 Deferred Backlog
+
+This section is the single named tracking location for every requirement this SPEC descoped. It exists because "deferred to a follow-up SPEC" with no named successor is how scope is silently dropped rather than genuinely deferred. No successor SPEC ID is allocated here: the three entries are heterogeneous (skill distribution, documentation axis, CLI surface), and each one's gating question is unanswered — allocating an ID now would invent a scope that nobody has reviewed. `spec.md` is `lifecycle: spec-anchored` and is therefore maintained after this SPEC closes, so this section remains a live handle.
+
+Each entry names its origin requirement, the open questions that must be answered before it can be planned, and the concrete trigger that should cause someone to pick it up.
+
+#### D-1: Shared-skill canonicalisation
+
+- Origin: REQ-AH-010 (removed from scope), AC-AH-013 (retired in place). Rationale: §2.2 → "Out of Scope — Shared-skill canonicalisation".
+- Open questions, all uncontracted: the config key name and its YAML location; the key's enum values; the key's default; the Windows symlink fallback behavior; and the ownership and update semantics of a mirrored skill tree (which side wins when `.claude/skills` and a mirror diverge).
+- Pickup trigger: an ownership and update-semantics review concludes, **or** OpenCode's native `.claude/skills` reading (opt-out `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`) stops being sufficient for a host MoAI wants to support. Until then the mirroring is not load-bearing and the deferral is safe rather than merely postponed.
+
+#### D-2: Per-workflow slash-workflow classification and host-coverage documentation
+
+- Origin: REQ-AH-014 (removed from scope). Rationale: §2.2 → "Out of Scope — Per-workflow slash-workflow classification".
+- Open questions: whether per-workflow granularity is the right axis at all given that REQ-AH-002's matrix already carries a `slash_workflows` feature group; and how a 13-entry per-workflow table would be kept from drifting against that group-level matrix.
+- Pickup trigger: the feature-group-level `slash_workflows` entry proves too coarse for a real user question — that is, someone needs to know whether a *specific* workflow runs on a given host and the group-level matrix cannot answer it.
+
+#### D-3: Host diagnostic command
+
+- Origin: REQ-AH-017 (removed from scope). Rationale: §2.2 → "Out of Scope — Host diagnostic command".
+- Open questions: the subcommand's name (no surface was ever named in any artifact — `moai host doctor` and `moai host validate` were both hypothetical); what it would check beyond what `moai host matrix` already reports; and whether it is a new subcommand at all rather than a flag on the existing `moai host` surface.
+- Pickup trigger: users report that `moai host matrix` plus the `--dry-run` surfaces retained under REQ-AH-008 leave a diagnosable failure mode uncovered.
 
 ## 3. Requirements
 
@@ -228,7 +252,7 @@ Existing `cc/glm/cg` behavior SHALL remain backward-compatible.
 
 ### REQ-AH-010: Shared Skill Installation — [REMOVED FROM SCOPE]
 
-**This requirement is removed from the scope of this SPEC** and deferred to a follow-up SPEC. See §2.2 → "Out of Scope — Shared-skill canonicalisation" for the full rationale. Its acceptance criterion (AC-AH-013) is retired in place.
+**This requirement is removed from the scope of this SPEC** and recorded in §2.3 Deferred Backlog → entry D-1, which carries its open questions and pickup trigger. See §2.2 → "Out of Scope — Shared-skill canonicalisation" for the full rationale. Its acceptance criterion (AC-AH-013) is retired in place.
 
 The heading is retained so REQ-AH-001..REQ-AH-018 numbering stays contiguous and so downstream references resolve to an explicit removal record rather than to a gap.
 
@@ -244,7 +268,22 @@ No implementation work is authorized under this requirement. `.claude/skills` be
 
 No Codex `config.toml` template SHALL be shipped (see §2.2 → "Out of Scope — Codex `config.toml` project template").
 
-The existing `.codex/hooks.json.tmpl` SHALL remain compatible with the 10 core host-neutral hook events. Any change to that event set is a separate SPEC.
+The existing `.codex/hooks.json.tmpl` SHALL remain compatible with the 10 core host-neutral hook events. That set is **exactly** the following, and this enumeration is the single source of truth every other artifact binds to:
+
+| # | Event |
+|---|-------|
+| 1 | `SessionStart` |
+| 2 | `PreToolUse` |
+| 3 | `PermissionRequest` |
+| 4 | `PostToolUse` |
+| 5 | `UserPromptSubmit` |
+| 6 | `Stop` |
+| 7 | `SubagentStart` |
+| 8 | `SubagentStop` |
+| 9 | `PreCompact` |
+| 10 | `PostCompact` |
+
+Count: 10 — no more, no fewer. The set is enumerated here rather than left as a bare cardinal so that a test author can write the assertion without reading the implementation. Evidence: the `Event` constants declared in `internal/agenthost/capability.go`. Any change to this event set is a separate SPEC — a change made here without a corresponding SPEC would silently desynchronise the template, the matrix, and AC-AH-009.
 
 ### REQ-AH-012: OpenCode Templates and Plugin
 
@@ -272,7 +311,7 @@ Specifically, a project-scoped `.codex/hooks.json` mapping SHALL NOT be reported
 
 ### REQ-AH-014: Slash Workflow Coverage — [REMOVED FROM SCOPE]
 
-**This requirement is removed from the scope of this SPEC** and deferred to a follow-up SPEC. See §2.2 → "Out of Scope — Per-workflow slash-workflow classification" for the full rationale.
+**This requirement is removed from the scope of this SPEC** and recorded in §2.3 Deferred Backlog → entry D-2, which carries its open questions and pickup trigger. See §2.2 → "Out of Scope — Per-workflow slash-workflow classification" for the full rationale.
 
 The heading is retained so REQ-AH-001..REQ-AH-018 numbering stays contiguous.
 
@@ -292,7 +331,7 @@ Existing projects without host fields SHALL behave exactly as before.
 
 ### REQ-AH-017: Validation and Dry Run — [REMOVED FROM SCOPE]
 
-**This requirement is removed from the scope of this SPEC** and deferred to a follow-up SPEC. See §2.2 → "Out of Scope — Host diagnostic command" for the full rationale.
+**This requirement is removed from the scope of this SPEC** and recorded in §2.3 Deferred Backlog → entry D-3, which carries its open questions and pickup trigger. See §2.2 → "Out of Scope — Host diagnostic command" for the full rationale.
 
 The heading is retained so REQ-AH-001..REQ-AH-018 numbering stays contiguous.
 

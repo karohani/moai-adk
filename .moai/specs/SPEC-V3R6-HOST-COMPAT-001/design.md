@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.2.0"
+version: "0.3.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-08-09
+updated: 2026-08-10
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -37,7 +37,7 @@ CLI launcher / tmux pane / worktree session
 
 ## 2. Core Interfaces
 
-Proposed package boundary:
+Package boundary, reconciled against the landed implementation in `internal/agenthost/command.go` and `capability.go`:
 
 ```go
 type Host string
@@ -48,28 +48,48 @@ const (
     HostOpenCode Host = "opencode"
 )
 
+type LaunchMode string
+
+const (
+    LaunchInteractive LaunchMode = "interactive"
+    LaunchExec        LaunchMode = "exec"
+)
+
 type LaunchRequest struct {
     Host        Host
     ProjectRoot string
+    Mode        LaunchMode
     Role        string
     Agent       string
     Model       string
     Prompt      string
-    Interactive bool
-    Session     string
+    Profile     string
     Sandbox     string
     Approval    string
-    DryRun      bool
+    Config      string
+    Session     string
+    // Attach carries the URL of a running OpenCode server. `opencode run --attach`
+    // is a value-taking [string] flag, so this is modelled as a string, not a bool.
+    Attach    string
+    Continue  bool
+    Auto      bool
+    ExtraArgs []string
 }
 
 type LaunchCommand struct {
-    Host Host
-    Cwd  string
-    Env  map[string]string
-    Argv []string
-    Notes []string
+    Host  Host              `json:"host"`
+    Cwd   string            `json:"cwd,omitempty"`
+    Env   map[string]string `json:"env,omitempty"`
+    Argv  []string          `json:"argv"`
+    Notes []string          `json:"notes,omitempty"`
 }
 ```
+
+Three deltas from the earlier revision of this block are worth naming, because each one is load-bearing elsewhere in this document:
+
+- `Attach string` (not `bool`) — required by §3's OpenCode flag-arity note and by AC-AH-017. This is the correction that landed in commit `2d01cdf95`.
+- `Continue` / `Auto` / `Profile` / `Config` — the fields §3 lists as OpenCode and Codex builder inputs. The earlier block declared none of them, so §2 and §3 contradicted each other.
+- `Mode LaunchMode` replaces the earlier `Interactive bool`, and `DryRun` is not a field of the request — dry-run is a CLI-level concern that decides whether the calculated `LaunchCommand` is printed or executed, not an input to argv calculation.
 
 ## 3. Host-Specific Builders
 
@@ -110,7 +130,7 @@ Two facts make the deferral safe rather than merely postponed:
 - Existing `.claude/skills` behavior is preserved exactly as-is — nothing about Claude skill distribution changes.
 - OpenCode reads Claude Code skills natively from `.claude/skills` (opt-out `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`; broader opt-outs `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`). Source: https://opencode.ai/docs/ — so OpenCode receives MoAI skills without any mirroring work.
 
-The deferred follow-up SPEC owns the open questions this section previously left uncontracted: the config key name and its YAML location, its enum values, its default, and the Windows symlink fallback behavior.
+The open questions this section previously left uncontracted — the config key name and its YAML location, its enum values, its default, and the Windows symlink fallback behavior — are recorded in `spec.md` §2.3 Deferred Backlog → entry D-1, together with the trigger that should cause someone to pick the work up.
 
 ### 4.2 Host template surfaces in scope
 

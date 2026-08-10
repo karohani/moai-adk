@@ -1,10 +1,10 @@
 ---
 id: SPEC-V3R6-HOST-COMPAT-001
 title: "Claude/Codex/OpenCode Compatibility Spine"
-version: "0.2.0"
+version: "0.3.0"
 status: in-progress
 created: 2026-07-05
-updated: 2026-08-09
+updated: 2026-08-10
 author: manager-spec
 priority: P1
 phase: "v3.1.0 target"
@@ -66,16 +66,18 @@ Given a launch request for host `codex` that establishes **all seven** REQ-AH-00
 When the command builder runs in dry-run mode,
 Then the returned argv begins with `codex` and every one of the following REQ-AH-006 surfaces is asserted individually, each **with its value** where the flag takes one:
 
-| # | Surface | Assertion |
-|---|---------|-----------|
-| 1 | `codex` interactive launch | argv[0] == `codex`, and no `exec` subcommand when the request is interactive |
-| 2 | `codex exec` | argv[1] == `exec` when the request is non-interactive |
-| 3 | `--cd` | the pair `--cd <project-root>` appears, value non-empty |
-| 4 | `--model` | the pair `--model <model>` appears, value non-empty |
-| 5 | `--profile` | the pair `--profile <profile>` appears, value non-empty |
-| 6 | `--sandbox` | the pair `--sandbox <sandbox>` appears, value non-empty |
-| 7 | `--ask-for-approval` | the pair `--ask-for-approval <approval>` appears, value non-empty |
-| 8 | `--config` | the pair `--config <config>` appears, value non-empty |
+| # | Surface | Arity | Assertion |
+|---|---------|-------|-----------|
+| 1 | `codex` interactive launch | subcommand | argv[0] == `codex`, and no `exec` subcommand when the request is interactive |
+| 2 | `codex exec` | subcommand | argv[1] == `exec` when the request is non-interactive |
+| 3 | `--cd` | string | the pair `--cd <project-root>` appears, value non-empty |
+| 4 | `--model` | string | the pair `--model <model>` appears, value non-empty |
+| 5 | `--profile` | string | the pair `--profile <profile>` appears, value non-empty |
+| 6 | `--sandbox` | string | the pair `--sandbox <sandbox>` appears, value non-empty |
+| 7 | `--ask-for-approval` | string | the pair `--ask-for-approval <approval>` appears, value non-empty |
+| 8 | `--config` | string | the pair `--config <config>` appears, value non-empty |
+
+No Codex surface in this table is boolean: two are subcommand assertions and six are value-taking pairs. The Arity column is therefore uniform, and is stated explicitly so this criterion and its sibling AC-AH-005 are read the same way.
 
 A bare flag emitted without its value FAILS this criterion. A flag omitted when its corresponding request field is empty PASSES — the assertion binds the configured case.
 
@@ -101,6 +103,8 @@ Then the returned argv begins with `opencode` and every one of the following REQ
 | 8 | `--auto` | boolean | the bare flag `--auto` appears with no following value |
 
 A value-taking flag emitted bare FAILS this criterion. A boolean flag emitted with a value also FAILS. Flag arity is asserted, not just flag presence.
+
+A flag omitted when its corresponding request field is empty — or, for the boolean flags `--continue` and `--auto`, when the field is false — PASSES. The assertion binds the configured case, exactly as its sibling AC-AH-004 does. This escape matters here because several of these surfaces are alternative modes rather than co-satisfiable ones: `--continue`, `--session <id>`, and `--attach <url>` would not all be set on one real invocation, and `--attach` changes the meaning of `--dir` to a path on the remote server. The criterion scopes to argv **calculation** per configured field, not to a single executable invocation.
 
 Evidence source for the arity column: `opencode run --help` on the installed binary, which types `--attach` as `[string]` with help text "attach to a running opencode server (e.g., http://localhost:4096)".
 
@@ -148,7 +152,7 @@ Given templates are rendered for Codex,
 When template tests run,
 Then both of the following hold:
 
-1. `.codex/hooks.json`, rendered from `internal/template/templates/.codex/hooks.json.tmpl`, is valid JSON and contains the 10 core host-neutral hook events.
+1. `.codex/hooks.json`, rendered from `internal/template/templates/.codex/hooks.json.tmpl`, is valid JSON, and the set of **event keys under its top-level `hooks` object** is **set-equal** to the 10 core host-neutral hook events enumerated in `spec.md` REQ-AH-011 — that is, `SessionStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`. A missing event FAILS this criterion and an extra event FAILS it equally; the assertion is set equality, not containment. Note the shape of the file: the events are the **keys** of the top-level `hooks` object, whereas the `matcher` field nested inside each event's entries carries a different value (for example `startup|resume|clear|compact` under `SessionStart`) and is NOT the event name. An implementation that asserts against `matcher` values instead of event keys does not satisfy this criterion. This mirrors how AC-AH-012 asserts the 12 feature groups against REQ-AH-002.
 2. The shared instruction file `AGENTS.md`, rendered from `internal/template/templates/AGENTS.md.tmpl`, is produced at the **project root** and contains no unresolved template variables.
 
 Given the rendered template set is enumerated,
@@ -214,7 +218,7 @@ The comparison is verbatim, including the `/` separator in `launcher/runtime` (t
 
 ## AC-AH-013: Shared Skill Policy — [RETIRED]
 
-**This criterion is retired.** Its requirement (REQ-AH-010, shared-skill installation from `.agents/skills`) is removed from the scope of this SPEC and deferred to a follow-up SPEC. See `spec.md` §2.2 → "Out of Scope — Shared-skill canonicalisation".
+**This criterion is retired.** Its requirement (REQ-AH-010, shared-skill installation from `.agents/skills`) is removed from the scope of this SPEC and recorded in `spec.md` §2.3 Deferred Backlog → entry D-1, which carries its open questions and pickup trigger. See `spec.md` §2.2 → "Out of Scope — Shared-skill canonicalisation" for the rationale.
 
 The identifier `AC-AH-013` is reserved and MUST NOT be reused for a different criterion. New criteria continue from AC-AH-017.
 
