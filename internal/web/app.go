@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/modu-ai/moai-adk/internal/profile"
+	"github.com/modu-ai/moai-adk/internal/settings"
+	"github.com/modu-ai/moai-adk/internal/settings/agentfm"
 )
 
 // app holds the Console's request-handling dependencies. Profile read/write and
@@ -47,6 +49,18 @@ type app struct {
 	readProjectNestedConfig  func(projectRoot string) (projectNestedCurrent, error)
 	writeProjectNestedConfig func(projectRoot string, form projectNestedForm) error
 
+	// Injectable seams over the M2b 10-section schema path (SPEC-WEB-CONSOLE-011).
+	// 읽기는 settings.SchemaCurrentValues/RawBlockValues, 쓰기는
+	// settings.ApplySchemaEdits(seam 8섹션 = yamlpatch, typed = config 매니저).
+	schemaCurrentValues func(projectRoot string) (map[string]string, error)
+	rawBlockValues      func(projectRoot string) (map[string]string, error)
+	applySchemaEdits    func(projectRoot string, edits map[string]string) error
+
+	// Injectable seams over the M3 sub-agent frontmatter surface
+	// (SPEC-WEB-CONSOLE-011 REQ-WC11-025/027..029 — internal/settings/agentfm).
+	listAgentFMs func(agentsDir string) ([]agentfm.AgentInfo, error)
+	patchAgentFM func(projectRoot string, edits []agentFMEdit) error
+
 	// triggerShutdown is 페이지 내 서버 종료 버튼(/__shutdown__)이 호출하는
 	// injectable seam 이다. openBrowser 와 동일한 패턴이지만 app 에 두는 이유는 —
 	// Config 가 값 전달이라 server 와 handler 가 하나의 closure 를 공유해야
@@ -70,6 +84,13 @@ func newApp(cfg Config) *app {
 
 		readProjectNestedConfig:  readProjectNestedConfig,
 		writeProjectNestedConfig: writeProjectNestedConfig,
+
+		schemaCurrentValues: settings.SchemaCurrentValues,
+		rawBlockValues:      settings.RawBlockValues,
+		applySchemaEdits:    settings.ApplySchemaEdits,
+
+		listAgentFMs: agentfm.List,
+		patchAgentFM: applyAgentFMEdits,
 	}
 }
 

@@ -120,6 +120,17 @@ const (
 	// EventMessageDisplay is triggered while assistant message text is displayed.
 	// Available since Claude Code v2.1.152+. Observe-only: no MoAI handler registered.
 	EventMessageDisplay EventType = "MessageDisplay"
+
+	// EventSetup is triggered on repository setup/maintenance flows
+	// (official trigger values: "init" | "maintenance"; carried in the shared
+	// Trigger input field). Observe-only: no MoAI handler registered.
+	//
+	// History: an earlier orphan EventSetup constant (dead CLI binding, no
+	// handler) was removed by SPEC-V3R2-MIG-002 M2.1. This re-add is
+	// RECOGNITION-ONLY — Setup is an official event per the Claude Code hooks
+	// spec (v2.1.196) and must validate via IsValidEventType. No cobra
+	// subcommand, no handler, no CoverageTable row.
+	EventSetup EventType = "Setup"
 )
 
 // ValidEventTypes returns all valid event types.
@@ -154,6 +165,7 @@ func ValidEventTypes() []EventType {
 		EventPostToolBatch,
 		EventUserPromptExpansion,
 		EventMessageDisplay,
+		EventSetup,
 	}
 }
 
@@ -175,6 +187,22 @@ const (
 	DecisionBlock = "block" // Used in top-level decision field for Stop, PostToolUse, etc.
 )
 
+// Permission mode constants for HookInput.PermissionMode (Claude Code
+// protocol input.permission_mode). "default" and "plan" are the
+// interactive/cautious modes where the user expects Claude Code's normal
+// permission prompt; "acceptEdits", "bypassPermissions", "auto", and
+// "dontAsk" are modes where the user has already opted into reduced
+// prompting. See NewSafeDefaultOutput for how these drive the PreToolUse
+// safe-path (no dangerous pattern found) decision.
+const (
+	PermissionModeDefault           = "default"
+	PermissionModePlan              = "plan"
+	PermissionModeAcceptEdits       = "acceptEdits"
+	PermissionModeBypassPermissions = "bypassPermissions"
+	PermissionModeAuto              = "auto"
+	PermissionModeDontAsk           = "dontAsk"
+)
+
 // HookInput represents the JSON payload received from Claude Code via stdin.
 // Fields follow the official Claude Code hooks protocol.
 type HookInput struct {
@@ -182,7 +210,7 @@ type HookInput struct {
 	SessionID      string `json:"session_id,omitempty"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
 	CWD            string `json:"cwd,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"` // default, plan, acceptEdits, dontAsk, bypassPermissions
+	PermissionMode string `json:"permission_mode,omitempty"` // default, plan, acceptEdits, bypassPermissions, auto, dontAsk
 	HookEventName  string `json:"hook_event_name,omitempty"`
 
 	// Tool-related fields (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest)
@@ -224,17 +252,24 @@ type HookInput struct {
 	Prompt string `json:"prompt,omitempty"`
 
 	// Notification fields
+	// Type is the OFFICIAL Claude Code field name for the notification type.
+	// NotificationType is the legacy MoAI field name, kept for backward compat.
 	Message          string `json:"message,omitempty"`
 	Title            string `json:"title,omitempty"`
+	Type             string `json:"type,omitempty"`
 	NotificationType string `json:"notification_type,omitempty"`
 
 	// Legacy/internal field (deprecated, use CWD instead)
 	ProjectDir string `json:"project_dir,omitempty"`
 
-	// TeammateIdle and TaskCompleted fields (Agent Teams v2.1.33+)
+	// TeammateIdle and TaskCompleted/TaskCreated fields (Agent Teams v2.1.33+).
+	// Official stdin fields: TeammateIdle sends agent_type (teammate name,
+	// parsed into AgentType above); TaskCreated/TaskCompleted send task_name.
+	// team_name/task_subject are legacy MoAI field names kept for backward compat.
 	TeamName        string `json:"team_name,omitempty"`
 	TeammateName    string `json:"teammate_name,omitempty"`
 	TaskID          string `json:"task_id,omitempty"`
+	TaskName        string `json:"task_name,omitempty"`
 	TaskSubject     string `json:"task_subject,omitempty"`
 	TaskDescription string `json:"task_description,omitempty"`
 
@@ -244,8 +279,11 @@ type HookInput struct {
 	AgentName      string `json:"agent_name,omitempty"`      // Name of the agent using the worktree
 
 	// ConfigChange fields (v2.1.49+)
+	// ConfigSource is the OFFICIAL Claude Code field name; ConfigurationSource
+	// is the legacy MoAI field name, kept for backward compat.
 	ConfigFilePath      string `json:"config_file_path,omitempty"`     // Path to the changed configuration file
-	ConfigurationSource string `json:"configuration_source,omitempty"` // user_settings, project_settings, local_settings, policy_settings, skills
+	ConfigSource        string `json:"config_source,omitempty"`        // user_settings, project_settings, local_settings, policy_settings, skills
+	ConfigurationSource string `json:"configuration_source,omitempty"` // Legacy alias of config_source
 
 	// TaskCreated fields (v2.1.84+)
 	// Reuses TaskID, TaskSubject, TaskDescription from TeammateIdle/TaskCompleted
@@ -290,13 +328,32 @@ type HookSpecificOutput struct {
 	UpdatedMCPToolOutput     string          `json:"updatedMCPToolOutput,omitempty"` // PostToolUse: replaces MCP tool output (MCP-only, pre-v2.1.121)
 	UpdatedToolOutput        string          `json:"updatedToolOutput,omitempty"`    // PostToolUse: replaces any tool output (v2.1.121+, all tools)
 	MxTags                   []mx.Tag        `json:"mxTags,omitempty"`               // SPEC-V3R2-SPC-002: @MX TAG structured data from PostToolUse handler
+
+	// Decision is the OFFICIAL PermissionRequest response object:
+	// hookSpecificOutput.decision{behavior:"allow"|"deny", updatedInput?, updatedPermissions?}.
+	// PermissionRequest does NOT use permissionDecision (that is PreToolUse-only).
+	Decision *PermissionRequestDecision `json:"decision,omitempty"`
+}
+
+// PermissionRequestDecision is the official PermissionRequest decision object
+// per the Claude Code hooks spec (code.claude.com/docs/en/hooks):
+// hookSpecificOutput.decision = {behavior, updatedInput?, updatedPermissions?}.
+type PermissionRequestDecision struct {
+	Behavior           string           `json:"behavior"` // "allow" | "deny"
+	UpdatedInput       map[string]any   `json:"updatedInput,omitempty"`
+	UpdatedPermissions []map[string]any `json:"updatedPermissions,omitempty"`
 }
 
 // HookOutput represents the JSON payload written to stdout for Claude Code.
 // The format varies by event type per Claude Code protocol.
 type HookOutput struct {
 	// Universal fields (all events)
-	Continue       bool   `json:"continue,omitempty"`       // If false, Claude stops processing entirely
+	//
+	// Continue is a *bool because "continue": false is the ONLY meaningful
+	// value per the official spec: nil means "no opinion" (field absent from
+	// JSON), false means halt. A plain bool with omitempty could never emit
+	// false (the halt signal would be unrepresentable).
+	Continue       *bool  `json:"continue,omitempty"`
 	StopReason     string `json:"stopReason,omitempty"`     // Message shown when continue is false
 	SystemMessage  string `json:"systemMessage,omitempty"`  // Warning message shown to user
 	SuppressOutput bool   `json:"suppressOutput,omitempty"` // If true, hides stdout from verbose mode
@@ -348,6 +405,44 @@ func NewAllowOutputWithData(data json.RawMessage) *HookOutput {
 	}
 }
 
+// @MX:NOTE: [AUTO] Mode-aware safe-path decision for PreToolUse. Fixes the
+// defect where a clean security scan ("allow") silently skipped Claude
+// Code's interactive permission prompt even in "default"/"plan" mode.
+//
+// NewSafeDefaultOutput returns the PreToolUse response for the "no dangerous
+// pattern found" safe path, chosen by permissionMode:
+//   - "default" / "plan" (interactive/cautious modes): returns an empty
+//     no-opinion output (&HookOutput{}) so Claude Code's normal permission
+//     flow decides — the user still gets prompted.
+//   - "acceptEdits" / "bypassPermissions" / "auto" / "dontAsk" (modes the
+//     user already opted into reduced prompting for): returns the existing
+//     allow decision, preserving autonomous UX.
+//   - empty or any unrecognized value: treated as autonomous (allow). The
+//     official Claude Code runtime always sends permission_mode, so an
+//     absent value should not surprise existing autonomous users with new
+//     prompts — only an EXPLICIT "default"/"plan" restores the prompt.
+//
+// Dangerous-pattern paths (deny/ask) are UNCHANGED by this function — it is
+// only ever consulted on the safe/no-danger path.
+func NewSafeDefaultOutput(permissionMode string) *HookOutput {
+	switch permissionMode {
+	case PermissionModeDefault, PermissionModePlan:
+		return &HookOutput{}
+	default:
+		return NewAllowOutput()
+	}
+}
+
+// permissionModeOf safely extracts PermissionMode from input, treating a nil
+// input as unspecified (empty) — which NewSafeDefaultOutput resolves to the
+// autonomous (allow) fallback, consistent with its documented rationale.
+func permissionModeOf(input *HookInput) string {
+	if input == nil {
+		return ""
+	}
+	return input.PermissionMode
+}
+
 // @MX:ANCHOR: [AUTO] PreToolUse deny response factory. Core factory used when rejecting tool execution.
 // @MX:REASON: fan_in=7, single entry point for deny decisions, protocol compliance is mandatory
 // NewDenyOutput creates a HookOutput with permissionDecision "deny" for PreToolUse.
@@ -387,12 +482,26 @@ func NewSuppressOutput() *HookOutput {
 	return &HookOutput{SuppressOutput: true}
 }
 
+// BoolPtr returns a pointer to b. Helper for the HookOutput.Continue field
+// ("continue": false is the only meaningful value; nil = field absent).
+func BoolPtr(b bool) *bool {
+	return &b
+}
+
+// SetContinue sets the Continue field explicitly (see BoolPtr).
+func (o *HookOutput) SetContinue(b bool) {
+	o.Continue = &b
+}
+
 // NewSessionOutput creates a HookOutput for SessionStart/SessionEnd events.
+// Only an explicit halt (continueSession == false) is serialized; the
+// affirmative case omits "continue" entirely (absent = continue, per spec).
 func NewSessionOutput(continueSession bool, message string) *HookOutput {
-	return &HookOutput{
-		Continue:      continueSession,
-		SystemMessage: message,
+	out := &HookOutput{SystemMessage: message}
+	if !continueSession {
+		out.Continue = BoolPtr(false)
 	}
+	return out
 }
 
 // NewPostToolOutput creates a HookOutput with additionalContext for PostToolUse.
@@ -433,14 +542,16 @@ func NewPostToolBlockOutput(reason string, additionalContext string) *HookOutput
 }
 
 // NewPermissionRequestOutput creates a HookOutput for PermissionRequest events.
-// Per Claude Code protocol (v2.1.59+), hookSpecificOutput.hookEventName must be
-// "PermissionRequest" for PermissionRequest events.
-func NewPermissionRequestOutput(decision, reason string) *HookOutput {
+// Official schema: hookSpecificOutput.decision = {behavior:"allow"|"deny",
+// updatedInput?, updatedPermissions?} — NOT permissionDecision (PreToolUse-only).
+// behavior must be "allow" or "deny"; the schema has no reason slot, so the
+// reason rides the top-level systemMessage (shown to the user).
+func NewPermissionRequestOutput(behavior, reason string) *HookOutput {
 	return &HookOutput{
+		SystemMessage: reason,
 		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName:            "PermissionRequest",
-			PermissionDecision:       decision,
-			PermissionDecisionReason: reason,
+			HookEventName: "PermissionRequest",
+			Decision:      &PermissionRequestDecision{Behavior: behavior},
 		},
 	}
 }
@@ -471,16 +582,28 @@ func NewPermissionDeniedRetryOutput() *HookOutput {
 	return &HookOutput{Retry: true}
 }
 
-// NewTeammateKeepWorkingOutput creates a HookOutput that signals exit code 2 for TeammateIdle.
-// Exit code 2 tells Claude Code to keep the teammate working.
-func NewTeammateKeepWorkingOutput() *HookOutput {
-	return &HookOutput{ExitCode: 2}
+// NewTeammateKeepWorkingOutput creates a HookOutput that keeps a teammate
+// working after a TeammateIdle event. Official protocol: TeammateIdle honors
+// top-level {"decision":"block","reason":...} JSON with exit 0. The old
+// ExitCode=2 channel is NOT used here: on exit 2 Claude Code ignores stdout
+// JSON and reads stderr — which the MoAI shell wrappers redirect to a log
+// file, so the keep-working reason never reached Claude Code.
+func NewTeammateKeepWorkingOutput(reason string) *HookOutput {
+	return &HookOutput{
+		Decision: DecisionBlock,
+		Reason:   reason,
+	}
 }
 
-// NewTaskRejectedOutput creates a HookOutput that signals exit code 2 for TaskCompleted.
-// Exit code 2 tells Claude Code to reject the task completion.
-func NewTaskRejectedOutput() *HookOutput {
-	return &HookOutput{ExitCode: 2}
+// NewTaskRejectedOutput creates a HookOutput that rejects a task completion
+// after a TaskCompleted event. Official protocol: TaskCompleted honors
+// top-level {"decision":"block","reason":...} JSON with exit 0 (see
+// NewTeammateKeepWorkingOutput for why ExitCode=2 is not used).
+func NewTaskRejectedOutput(reason string) *HookOutput {
+	return &HookOutput{
+		Decision: DecisionBlock,
+		Reason:   reason,
+	}
 }
 
 // Handler processes a specific hook event type.
