@@ -63,6 +63,16 @@ const (
 
 	// EnvUpdateURL overrides the GitHub releases API URL.
 	EnvUpdateURL = "MOAI_UPDATE_URL"
+
+	// EnvProxyStateDir overrides the moai proxy daemon's machine-scope
+	// runtime state directory (default: ~/.moai/proxy — see
+	// internal/proxy.DefaultDaemonStateDir). SPEC-PROXY-001 M4.
+	EnvProxyStateDir = "MOAI_PROXY_STATE_DIR"
+
+	// EnvProxyRegistryPath overrides the moai proxy machine-scope group
+	// registry file path (default: ~/.moai/config/proxy-groups.yaml — see
+	// internal/proxy.DefaultRegistryPath). SPEC-PROXY-001 M4.
+	EnvProxyRegistryPath = "MOAI_PROXY_REGISTRY_PATH"
 )
 
 // MoAI test-only environment variables.

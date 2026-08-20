@@ -746,6 +746,7 @@ Task 도구 완료 시 PostToolUse 훅이 메트릭을 로깅합니다. 이 데�
 | `moai glm` | GLM 5 API로 Claude Code 시작 (비용 효율적 대안) |
 | `moai cc` | GLM 설정 없이 Claude Code 시작 (Claude 전용 모드) |
 | `moai cg` | CG 모드 실행 — Claude 리더 + GLM 팀원 (Claude Code 자동 시작, tmux 필수) |
+| `moai proxy [-g <그룹>] [--set <이름>]` | 로컬 moai proxy 게이트웨이를 거쳐 Claude Code 실행 — 머신 전체가 공유하는 참조 계수 기반 데몬이 bedrock/litellm/openai-compatible/codex 백엔드를 하나의 Anthropic 호환 엔드포인트로 통합해 라우팅 |
 | `moai version` | 버전, 커밋 해시, 빌드 날짜 정보 |
 
 ---

@@ -717,6 +717,7 @@ All hook events follow the Claude Code hooks protocol with JSON stdin/stdout com
 | `moai glm` | Start Claude Code with GLM 5 API (cost-effective alternative) |
 | `moai cc` | Start Claude Code without GLM settings (Claude-only mode) |
 | `moai cg` | Launch CG mode — Claude leader + GLM teammates (auto-starts Claude Code, tmux required) |
+| `moai proxy [-g <group>] [--set <name>]` | Launch Claude Code through the local moai proxy gateway — a machine-wide, reference-counted daemon that routes requests to bedrock/litellm/openai-compatible/codex backends behind one Anthropic-shaped endpoint |
 | `moai version` | Display version, commit hash, and build date |
 
 ---
