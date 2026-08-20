@@ -716,6 +716,7 @@ Claude의 각 티어는 `ANTHROPIC_DEFAULT_*_MODEL` 환경변수를 통해 GLM �
 | `moai update` | 최신 버전으로 업데이트 (삭제 전 백업 · 자동 롤백 지원) |
 | `moai graph <build\|query>` | 코드베이스 그래프(edges.jsonl) 생성·조회 — 호출자 찾기, 폭발 반경, 마일스톤 교차검사 |
 | `moai cc` / `moai glm` / `moai cg` | Claude 전용 / GLM 전용 / 하이브리드 세션 |
+| `moai proxy [-g <그룹>] [--set <이름>]` | 로컬 moai proxy 게이트웨이를 거쳐 Claude Code 실행 — 머신 전체가 공유하는 참조 계수 기반 데몬이 bedrock/litellm/openai-compatible/codex 백엔드를 하나의 Anthropic 호환 엔드포인트로 통합해 라우팅 |
 | `moai worktree <sync\|done\|remove\|clean\|recover\|snapshot\|verify\|restore>` | Git worktree 유지 관리 (워크트리 진입은 런처의 몫) |
 | `moai session <list\|register\|current>` | 멀티 세션 조율 |
 | `moai spec <audit\|archive\|lint\|list\|new>` | SPEC 라이프사이클 도구 |

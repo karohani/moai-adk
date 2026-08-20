@@ -236,6 +236,16 @@ const (
 	// re-inject after /clear env loss (REQ-CHAIN-013).
 	// SPEC-CHAIN-CORE-001 REQ-CHAIN-006.
 	EnvChainNodeID = "MOAI_CHAIN_NODE_ID"
+
+	// EnvProxyStateDir overrides the moai proxy daemon's machine-scope
+	// runtime state directory (default: ~/.moai/proxy — see
+	// internal/proxy.DefaultDaemonStateDir). SPEC-PROXY-001 M4.
+	EnvProxyStateDir = "MOAI_PROXY_STATE_DIR"
+
+	// EnvProxyRegistryPath overrides the moai proxy machine-scope group
+	// registry file path (default: ~/.moai/config/proxy-groups.yaml — see
+	// internal/proxy.DefaultRegistryPath). SPEC-PROXY-001 M4.
+	EnvProxyRegistryPath = "MOAI_PROXY_REGISTRY_PATH"
 )
 
 // GLM inject/clear env-var names (set onto the process env when entering
