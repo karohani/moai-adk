@@ -143,7 +143,7 @@ AC-PROXY-001a/b/c, 002, 005a-005f, 009, 010 (M2); AC-PROXY-011, 012a, 012b, 013,
 
 - run_milestone: M1 of M1-M4 (plan.md §D)
 - run_status: milestone-complete — awaiting orchestrator review before M2 (semi-autonomous progression, per spawn instruction)
-- m1_commit_strategy: single milestone commit (see Follow-up note below — not yet committed at time of writing this evidence; commit SHA to be backfilled)
+- m1_commit_strategy: single milestone commit — `50542c7ff` on branch `worktree-agent-a1ebd35fa5ba3d08b` (this agent's isolated worktree; NOT pushed to `origin/main` — Tier L routes through `manager-git`/PR per SPEC Phase Discipline Route B, out of this delegation's scope)
 - ac_pass_count (M1-scoped): 7 (AC-PROXY-003, 004, 006, 007a, 007b, 008, 016)
 - ac_fail_count (M1-scoped): 0
 - new_files: internal/proxy/registry.go, internal/proxy/registry_loader.go, internal/proxy/catalog.go, internal/proxy/resolve.go, internal/proxy/registry_test.go, internal/proxy/catalog_test.go, internal/proxy/resolve_test.go
