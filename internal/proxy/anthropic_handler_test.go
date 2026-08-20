@@ -27,6 +27,10 @@ func handlerFixtureRegistry(litellmBaseURL string) *Registry {
 				Type:   GroupTypeCodex,
 				Models: []string{"gpt-5-codex"},
 			},
+			"cop": {
+				Type:   GroupTypeCopilot,
+				Models: []string{"whatever"},
+			},
 		},
 	}
 }
@@ -116,17 +120,22 @@ func TestMessagesHandler_UnknownModelIsBadRequest(t *testing.T) {
 }
 
 // TestMessagesHandler_UnwiredGroupTypeIsNotImplemented verifies a group
-// type not yet wired into the M2 daemon surface (codex — deferred to M3
-// per plan.md scope) returns 501, never a silent success.
+// type explicitly OUT of v1 scope (copilot — plan.md M3 item 8, spec.md
+// §H) returns 501, never a silent success. codex was M2's placeholder for
+// this test; now that codex is wired (M3), copilot is the correct
+// unwired-type fixture — see also
+// TestMessagesHandler_UnwiredCopilotGroupTypeIsNotImplemented in
+// anthropic_handler_openai_test.go for the M3-authored duplicate covering
+// the same scenario from the M3 delegation's own fixture.
 func TestMessagesHandler_UnwiredGroupTypeIsNotImplemented(t *testing.T) {
 	reg := handlerFixtureRegistry("")
-	cat := NewCatalog(reg, []string{"codex-backend"})
+	cat := NewCatalog(reg, []string{"cop"})
 	h, err := NewMessagesHandler(reg, cat, nil)
 	if err != nil {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}
 
-	body := `{"model":"codex-backend/gpt-5-codex","messages":[]}`
+	body := `{"model":"cop/whatever","messages":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
