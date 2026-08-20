@@ -250,6 +250,24 @@ type LLMConfig struct {
 	DefaultModel string `yaml:"default_model"`
 	QualityModel string `yaml:"quality_model"`
 	SpeedModel   string `yaml:"speed_model"`
+	// Proxy carries the project's pointer into the machine-scoped `moai
+	// proxy` group registry (SPEC-PROXY-001). The registry itself
+	// (~/.moai/config/proxy-groups.yaml) is NOT part of this struct — it is
+	// machine-scoped, not project-scoped (design.md §3.1).
+	Proxy LLMProxyConfig `yaml:"proxy,omitempty"`
+}
+
+// LLMProxyConfig is the project-level preference layer for `moai proxy`
+// (SPEC-PROXY-001, design.md §3.1/§3.3). It carries ONLY a pointer — the
+// name of a set defined in the machine-scoped registry
+// (~/.moai/config/proxy-groups.yaml) — never group definitions or
+// credentials.
+type LLMProxyConfig struct {
+	// DefaultSet names the machine-registry set to use when `moai proxy` is
+	// invoked with neither -g nor --set (REQ-PROXY-010). Empty means "no
+	// project preference" — resolution falls through to the machine
+	// registry's sets.default.
+	DefaultSet string `yaml:"default_set,omitempty"`
 }
 
 // ClaudeTierModels represents Claude model mappings by performance tier.
