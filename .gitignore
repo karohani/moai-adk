@@ -181,6 +181,7 @@ secret-*.*
 # Claude Code Configuration
 # ===========================================
 .claude/settings.local.json
+.claude/settings.local.json.lock
 .claude/settings.local.*.json
 .claude/.env.local*
 .claude/local/
