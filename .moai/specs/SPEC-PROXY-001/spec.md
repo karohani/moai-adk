@@ -2,7 +2,7 @@
 id: SPEC-PROXY-001
 title: "moai proxy — 로컬 다중 백엔드 LLM 게이트웨이"
 version: "0.4.0"
-status: draft
+status: in-progress
 created: 2026-08-19
 updated: 2026-08-20
 author: manager-spec

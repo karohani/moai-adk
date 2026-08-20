@@ -220,3 +220,12 @@ llm:
     #   glm-5.3: 1000000
     #   glm-4.7: 202752
     #   glm-4.5-air: 128000
+
+  # moai proxy — project-level preference pointer only (multi-backend LLM
+  # gateway). Group and set DEFINITIONS live in the machine-scoped registry
+  # (~/.moai/config/proxy-groups.yaml), never here — this project file only
+  # points at a set name by name. See docs for `moai proxy`.
+  proxy:
+    default_set: ""       # name of a set defined in the machine registry;
+                           # empty means "no project preference" (falls
+                           # through to the machine registry's sets.default)

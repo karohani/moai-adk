@@ -286,6 +286,24 @@ type LLMConfig struct {
 	DefaultModel string `yaml:"default_model"`
 	QualityModel string `yaml:"quality_model"`
 	SpeedModel   string `yaml:"speed_model"`
+	// Proxy carries the project's pointer into the machine-scoped `moai
+	// proxy` group registry (SPEC-PROXY-001). The registry itself
+	// (~/.moai/config/proxy-groups.yaml) is NOT part of this struct — it is
+	// machine-scoped, not project-scoped (design.md §3.1).
+	Proxy LLMProxyConfig `yaml:"proxy,omitempty"`
+}
+
+// LLMProxyConfig is the project-level preference layer for `moai proxy`
+// (SPEC-PROXY-001, design.md §3.1/§3.3). It carries ONLY a pointer — the
+// name of a set defined in the machine-scoped registry
+// (~/.moai/config/proxy-groups.yaml) — never group definitions or
+// credentials.
+type LLMProxyConfig struct {
+	// DefaultSet names the machine-registry set to use when `moai proxy` is
+	// invoked with neither -g nor --set (REQ-PROXY-010). Empty means "no
+	// project preference" — resolution falls through to the machine
+	// registry's sets.default.
+	DefaultSet string `yaml:"default_set,omitempty"`
 }
 
 // ClaudeTierModels represents Claude model mappings by performance tier.
@@ -1175,10 +1193,10 @@ type DesignEvaluator struct {
 
 // DesignEvolution holds evolution and self-learning settings.
 type DesignEvolution struct {
-	ArchiveAfterEvolve      bool                     `yaml:"archive_after_evolve"`
-	AutoEvolveThreshold     int                      `yaml:"auto_evolve_threshold"`
-	CooldownHours           int                      `yaml:"cooldown_hours"`
-	GraduationCriteria      DesignGraduationCriteria `yaml:"graduation_criteria"`
+	ArchiveAfterEvolve  bool                     `yaml:"archive_after_evolve"`
+	AutoEvolveThreshold int                      `yaml:"auto_evolve_threshold"`
+	CooldownHours       int                      `yaml:"cooldown_hours"`
+	GraduationCriteria  DesignGraduationCriteria `yaml:"graduation_criteria"`
 	// MaxActiveLearnings is declared but NOT read by any production code path.
 	// The actual ceiling on active learnings is enforced by two independent
 	// hardcoded constants: internal/evolution/types.go MaxActiveLearnings (= 50)
@@ -1186,9 +1204,9 @@ type DesignEvolution struct {
 	// Wiring this config field to those sites is out of scope (a refactor beyond
 	// SPEC-CONFIG-KEY-HONESTY-001). Treat this field as documentation of the
 	// intended value, not the lever.
-	MaxActiveLearnings      int                      `yaml:"max_active_learnings"`
-	MaxEvolutionRatePerWeek int                      `yaml:"max_evolution_rate_per_week"`
-	RequireApproval         bool                     `yaml:"require_approval"`
+	MaxActiveLearnings      int  `yaml:"max_active_learnings"`
+	MaxEvolutionRatePerWeek int  `yaml:"max_evolution_rate_per_week"`
+	RequireApproval         bool `yaml:"require_approval"`
 }
 
 // DesignGraduationCriteria holds graduation thresholds for learnings.
