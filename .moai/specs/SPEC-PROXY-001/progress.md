@@ -263,20 +263,149 @@ $ grep -rn "AskUserQuestion\|mcp__askuser" internal/proxy/ | grep -v "_test.go" 
 - `TestEndToEnd_ClaudeCodeConversationViaProxy` verifies the daemon's HTTP relay mechanics, not an actual Claude Code CLI client's behavior against the proxy — the interactive-client leg of AC-PROXY-009 requires operator action outside this environment.
 - `golangci-lint` remains absent from this environment (same gap M1 reported); `go vet ./...` is the only static-analysis signal captured this run.
 
+## M3 subsection — 공유 OpenAI↔Anthropic 번역 계층
+
+**cycle_type: tdd** (RED-GREEN-REFACTOR). Milestone M3 ("공유 OpenAI↔Anthropic 번역 계층", plan.md §D — "이 마일스톤이 작업량의 대부분이다"). Continues in the SAME worktree/session as M1/M2, after orchestrator independent re-verification + user approval. This run was interrupted mid-milestone by a host-machine sleep event (infrastructure failure, not a rejection) and resumed from the orchestrator-confirmed on-disk state; the RED/GREEN evidence below spans both the pre-interruption and post-resume portions of the same continuous implementation. M4 not started.
+
+### M3 scope delivered (plan.md items 1-9)
+
+1. **Non-streaming request/response translation** (`translate.go`) — `ToOpenAIChatRequest` / `FromOpenAIChatResponse`. Field mapping: `model` kept in-body (unlike Bedrock's InvokeModel, which takes the model out-of-band); `system` (string OR content-block-array form) becomes a leading system-role message; `stop_sequences` renames to `stop`; `top_k` dropped (no OpenAI equivalent); `tools` translates to the function-tool wrapper; assistant `tool_use` + user `tool_result` blocks map to OpenAI `tool_calls` / `tool` role messages.
+2. **Streaming SSE event-stream reconstruction** (`translate_stream.go`) — `openAIStreamTranslator`, a state machine (chunk boundaries are NOT 1:1 with Anthropic events, confirmed the state-machine requirement plan.md anticipated) turning OpenAI delta chunks into `message_start` / `content_block_start` / `content_block_delta` / `content_block_stop` / `message_delta` / `message_stop`. `message_delta`/`message_stop` are **deferred** until the first of: a usage-only trailing chunk, `[DONE]`, or EOF — this eliminates the co-located-vs-trailing-usage gap (handles both OpenAI's `stream_options.include_usage` trailing-chunk shape AND self-hosted-server co-located-usage shape with the same code path).
+3. **`tool_use` block translation / fragment reassembly** — OpenAI `tool_calls[].function.arguments` fragments (arriving across many chunks) are relayed immediately as `input_json_delta` chunks; the reassembly happens client-side by concatenation, the SAME mechanism Anthropic's own streaming API uses — the translator does not buffer/reassemble server-side, it relays.
+4. **`openai-compatible` group** (`openai_compatible.go`) — the translator's first consumer. No auth header applied in v1 (self-hosted GPU cluster; per plan.md "인증이 단순해서 번역 로직만 검증할 수 있다" — advisor-confirmed: no AC constrains openai-compatible auth, and an api-key config field would collide with REQ-PROXY-024's reference-only credential rule anyway).
+5. **`codex` credential reader** (`codex_credentials.go`) — `ReadCodexPlaintextAuthFile` lenient-parses the research.md §2.3 observed schema (top-level `auth_mode`/`OPENAI_API_KEY`/`tokens`/`last_refresh`, `tokens` sub-object with `id_token`/`access_token`/`refresh_token`/`account_id`); unknown fields never break parsing (encoding/json's default unmapped-key tolerance), only the fields actually needed (`auth_mode`, `tokens.access_token`, `tokens.account_id`) are required. An `auth_mode` other than the one observed value `"chatgpt"` returns an error wrapping `ErrCodexUnknownAuthMode` — design.md §5.3's "모르는 auth_mode를 만나면 추측하지 말고 그 그룹을 비활성으로 표시한다" implemented literally: the group deactivates rather than guessing how to authenticate. **Both storage locations are attempted** (`ReadCodexCredentials` tries plaintext first, then `ReadCodexOSCredentialStore`) — the OS-credential-store leg does NOT guess a service/account name to probe (research.md §2.3 never observed that location's format); it returns a fixed, documented `ErrCodexOSStoreUnverified` sentinel. This is the honest implementation of "try both locations": the attempt is a real callable code path, it just cannot succeed until the format is actually observed on a real OS-credential-store-using install — inventing a service name to probe would itself be an unverified-premise claim (verification-claim-integrity.md §1.1 surface 4).
+6. **Verification against an official OpenAI Codex CLI install** — **NOT possible in this environment.** `command -v codex opencodex` confirms this machine has ONLY `opencodex` (`/opt/homebrew/bin/opencodex`), NOT the official `codex` binary — the exact caveat research.md §2.3 already flagged. Re-inspecting this machine's `~/.codex/auth.json` key names (values not read) reproduced the identical schema research.md observed — but this is the SAME instance, not independent verification. `internal/proxy/codex_credentials_test.go`'s `TestReadCodexPlaintextAuthFile_AgainstOfficialCodexCLI` encodes this honestly: it probes `exec.LookPath("codex")` and **SKIPS with an explicit reason** naming exactly why (opencodex-only environment) rather than silently passing or being omitted from the suite. If an official `codex` binary with a logged-in `auth.json` is ever present, this test runs for real and confirms or refutes the schema. Reported as a Gap below — NOT upgraded to a claimed PASS.
+7. **Investigation: which API endpoint the codex token authenticates against** — **narrowed but not settled.** research.md §2.3's `auth_mode: "chatgpt"` observation already narrowed the target toward OpenAI's ChatGPT-backend API (distinct from the `api.openai.com` platform API). This delegated session has **no WebFetch/WebSearch tool** to complete the investigation a prior plan-phase agent started with WebFetch. A Bash-only attempt was made: this machine's `~/.codex/opencodex.config.toml` / `~/.codex/config.toml` carry a `base_url` pointing at `http://127.0.0.1:10100` — a LOCAL reverse-proxy override specific to this development machine, not the official CLI's real default, and not evidence of anything about the official endpoint (also, this is `opencodex`, not the official CLI — see item 6). **Decision made instead of guessing**: rather than hardcode an unverified URL (which would embed TWO unverified claims — the URL AND the request shape that endpoint expects), `serveCodex` REQUIRES `Group.BaseURL` to be explicitly configured for codex groups; an empty `BaseURL` isolates the group with a reason naming the open investigation (see item 9 below). This satisfies plan.md item 7's "확정하거나, 확정할 수 없었던 이유와 남은 부분을 명시적으로 기록한다" via the second branch.
+8. **`copilot` group** — confirmed NOT implemented. `serveCodex`/`serveOpenAICompatible` exist for `codex`/`openai-compatible` only; `MessagesHandler.ServeHTTP`'s switch statement has no `GroupTypeCopilot` case, so a copilot-typed group request falls through to the `default` branch (501, "not yet wired"). `TestMessagesHandler_UnwiredCopilotGroupTypeIsNotImplemented` and the updated `TestMessagesHandler_UnwiredGroupTypeIsNotImplemented` (repointed from a codex fixture to a copilot fixture now that codex is wired, per explicit advisor guidance — the M1 type enum entry needed no schema change) both verify this. `grep -n "GroupTypeCopilot" internal/proxy/*.go | grep -v _test.go` shows the type constant (registry.go, M1) and its `SupportedInV1()` exclusion (M1) only — no adapter code anywhere.
+9. **Group-level isolation on credential-read failure** (REQ-PROXY-021, AC-PROXY-014) — `EvaluateGroupStatusWithCodexProbe` (`codex_group.go`) extends M1's `EvaluateGroupStatus` (type-support isolation) with M3's credential/config-readiness isolation for codex-type groups: a codex group with no `base_url` configured, or whose credential store cannot be read, is isolated inactive with a reason naming the group and the attempted read path — daemon startup and every OTHER group continue unaffected. Same isolation shape as M2's unsupported-type isolation, extended per plan.md's explicit instruction ("REQ-PROXY-021과 같은 형태").
+
+### Single-shared-translator evidence (AC-PROXY-011 / REQ-PROXY-018)
+
+```
+$ grep -rn "ToOpenAIChatRequest(\|FromOpenAIChatResponse(\|TranslateOpenAIStreamToAnthropicSSE(" internal/proxy/*.go | grep -v "_test.go"
+internal/proxy/openai_shared.go:45:	translated, err := ToOpenAIChatRequest(anthropicBody)
+internal/proxy/openai_shared.go:77:		rc := TranslateOpenAIStreamToAnthropicSSE(resp.Body, messageID, model)
+internal/proxy/openai_shared.go:105:	anthResp, err := FromOpenAIChatResponse(body)
+internal/proxy/translate_stream.go:328:func TranslateOpenAIStreamToAnthropicSSE(r io.Reader, messageID, model string) io.ReadCloser {
+internal/proxy/translate.go:57:func ToOpenAIChatRequest(anthropicBody []byte) ([]byte, error) {
+internal/proxy/translate.go:289:func FromOpenAIChatResponse(openaiBody []byte) ([]byte, error) {
+
+$ grep -n "serveOpenAIShapedMessages(" internal/proxy/*.go | grep -v "_test.go"
+internal/proxy/codex_group.go:71:	serveOpenAIShapedMessages(w, r, client, group.BaseURL, auth, anthropicBody, model, stream)
+internal/proxy/openai_compatible.go:18:	serveOpenAIShapedMessages(w, r, client, baseURL, noAuth, anthropicBody, model, stream)
+internal/proxy/openai_shared.go:35:func serveOpenAIShapedMessages(
+```
+All three translation entry points have exactly ONE non-test caller site (`openai_shared.go`), and exactly TWO callers of the shared handler (`codex_group.go`, `openai_compatible.go`) — no per-consumer duplicate translation implementation exists anywhere in the package.
+
+### RED evidence (verbatim, captured before each implementation unit — spans pre- and post-interruption)
+
+```
+$ go vet ./internal/proxy/...  (before translate.go existed)
+vet: internal/proxy/translate_test.go:25:14: undefined: ToOpenAIChatRequest
+
+$ go vet ./internal/proxy/...  (before translate_stream.go existed)
+vet: internal/proxy/translate_stream_test.go:40:8: undefined: newOpenAIStreamTranslator
+
+$ go vet ./internal/proxy/...  (before openai_shared.go existed)
+vet: internal/proxy/openai_shared_test.go:37:2: undefined: serveOpenAIShapedMessages
+
+$ go vet ./internal/proxy/...  (before codex_credentials.go existed)
+vet: internal/proxy/codex_credentials_test.go:44:16: undefined: ReadCodexPlaintextAuthFile
+
+$ go vet ./internal/proxy/...  (before codex_group.go existed, post-resume)
+vet: internal/proxy/codex_group_test.go:21:2: undefined: serveCodex
+
+$ go test ./internal/proxy/... -run 'TestMessagesHandler_RoutesToOpenAICompatible|TestMessagesHandler_RoutesToCodex' -v  (before handler wiring, post-resume)
+=== RUN   TestMessagesHandler_RoutesToOpenAICompatible
+    anthropic_handler_openai_test.go:43: status = 501, want 200; body=proxy: group type "openai-compatible" is not yet wired into the daemon /v1/messages surface
+--- FAIL: TestMessagesHandler_RoutesToOpenAICompatible (0.00s)
+=== RUN   TestMessagesHandler_RoutesToCodex
+    anthropic_handler_openai_test.go:87: status = 501, want 200; body=proxy: group type "codex" is not yet wired into the daemon /v1/messages surface
+--- FAIL: TestMessagesHandler_RoutesToCodex (0.00s)
+FAIL
+```
+
+### GREEN evidence (verbatim, this run, this tree — HEAD after implementation)
+
+```
+$ go test ./internal/proxy/... -v 2>&1 | grep -c '^--- PASS'
+120
+$ go test ./internal/proxy/... -v 2>&1 | grep -c '^--- FAIL'
+0
+$ go test ./internal/proxy/... -v 2>&1 | grep -c '^--- SKIP'
+1
+$ go test ./internal/proxy/... -coverprofile=/tmp/proxy_m3_cover.out && go tool cover -func=/tmp/proxy_m3_cover.out | tail -1
+ok  	github.com/modu-ai/moai-adk/internal/proxy	0.548s	coverage: 86.1% of statements
+total:									(statements)				86.2%
+```
+120 PASS, 0 FAIL, 1 SKIP (the official-Codex-CLI schema verification — reported honestly, not silently). All 109 pre-existing M1/M2 tests remain green — no regression.
+
+### Build / vet / cross-platform (this run)
+
+```
+$ go build ./...
+(exit 0, no output)
+$ go vet ./...
+(exit 0, no output)
+$ GOOS=windows GOARCH=amd64 go build ./...
+(exit 0, no output)
+```
+
+### Subagent boundary + template neutrality (unchanged — M3 touches no template surface)
+
+```
+$ grep -rn "AskUserQuestion\|mcp__askuser" internal/proxy/ | grep -v "_test.go" | grep -v "// "
+(no output — 0 matches, exit 1)
+$ grep -n "PROXY-001\|SPEC-PROXY" internal/template/templates/.moai/config/sections/llm.yaml
+(no output — 0 matches, exit 1)
+```
+
+### AC PASS/FAIL matrix — M3-scoped AC IDs
+
+| AC ID | REQ | Status | Verification | Actual Output |
+|---|---|---|---|---|
+| AC-PROXY-011 | REQ-PROXY-018 | PASS | grep of translation-entry-point + shared-handler callers (above) | PASS — exactly 1 caller site per translation function, exactly 2 callers of the single shared handler, no duplicate implementation |
+| AC-PROXY-012a | REQ-PROXY-019 | PASS | `go test -run TestOpenAIStreamTranslator_TextOnly_EventOrderAndAssembly ./internal/proxy/...` | PASS — event order `message_start → content_block_start → content_block_delta ×2 → content_block_stop → message_delta → message_stop`; assembled text `"Hello, world"` matches backend delta concatenation |
+| AC-PROXY-012b | REQ-PROXY-019 | PASS | `go test -run TestOpenAIStreamTranslator_ToolCallFragmentReassembly ./internal/proxy/...` | PASS — reassembled `input_json_delta` fragments parse to `{"location":"NYC"}`, matching the backend's own concatenation |
+| AC-PROXY-013 | REQ-PROXY-020 | PASS | `go test -run TestServeCodex_NoInteractiveAuthFlowSourceCheck ./internal/proxy/...` | PASS — grep of `codex_credentials.go`/`codex_group.go` for `exec.Command(`/`http.Get("https://`/`browser`/`OAuth`/`oauth2.` finds 0 matches; credential acquisition is a pure file read |
+| AC-PROXY-014 | REQ-PROXY-021 | PASS | `go test -run TestEvaluateGroupStatusWithCodexProbe_IsolatesCredentialFailureOnly ./internal/proxy/...` | PASS — group A (bedrock, healthy) stays active; group B (codex, broken credential store) isolates inactive with a reason naming "B" and the attempted read path; A is unaffected |
+
+### Not in M3 scope (remain untested / unimplemented, by design)
+
+- `copilot` adapter — explicitly OUT of v1 scope (plan.md M3 item 8, spec.md §H); resumption requires all three of plan.md §B.2's Copilot items answered first (storage location + token exchange + inference endpoint), belonging to a follow-up SPEC.
+- M4 CLI wiring/docs — not started (this delegation stops before M4 per the semi-autonomous checkpoint instruction).
+- Real official-OpenAI-Codex-CLI live verification (item 6) and the codex endpoint's final confirmation (item 7) — both explicit Gaps below, not silently deferred.
+
+### Gaps (explicitly not observed, M3)
+
+- **Item 6 (official Codex CLI schema verification) — genuinely could not be performed in this environment.** Only `opencodex` is installed, not the official `codex` binary. The re-observed schema on this machine is the SAME instance research.md §2.3 already used, not an independent data point. `TestReadCodexPlaintextAuthFile_AgainstOfficialCodexCLI` SKIPs with this exact reason rather than passing or being silently omitted.
+- **Item 7 (codex token target endpoint) — narrowed, not settled.** No WebFetch/WebSearch tool was available to this delegated session to complete the investigation research.md §2.3 started. The mitigation (require explicit `Group.BaseURL`, isolate-with-reason otherwise) is a documented engineering decision, not a resolution of the underlying open question — the endpoint itself remains unconfirmed.
+- **Streaming translator real-network coverage** — `translate_stream_test.go` and `openai_shared_test.go` exercise the state machine and the HTTP relay against `httptest` fixtures; no real OpenAI-compatible backend (self-hosted GPU cluster, real LiteLLM, or a real Codex ChatGPT-backend endpoint) was available to validate against actual wire traffic. The shapes tested are drawn from the OpenAI Chat Completions API's publicly documented schema, not observed live traffic.
+- **Multi-choice (`n>1`) streaming** — `openAIStreamTranslator` reads `choices[0]` only (v1 scope, documented in `translate_stream.go`'s doc comment); a backend returning `n>1` choices is not handled and is out of this milestone's scope.
+- The pre-existing, unrelated `TestRunHookEvent_ReadInputError` panic in `internal/cli/coverage_test.go` was not re-checked this milestone (M1/M2 already confirmed it's out of `internal/proxy` scope via `git status --short`; M3's diff is exclusively `internal/proxy/*` — same non-overlap holds).
+
+### Residual risk (M3)
+
+- The endpoint-unsettled decision (item 7) means a real `codex` group cannot actually serve a request in this build until an operator supplies a verified `base_url` — this is a deliberate scope-narrowing (explicit config over a guessed default), but it does mean M3's codex adapter is not yet end-to-end usable without that external input, unlike `openai-compatible` which works immediately given any real base_url.
+- `ReadCodexOSCredentialStore`'s permanent-failure design means codex groups relying on the OS credential store (rather than the plaintext file) can NEVER activate in the current build — this is intentional (no fabricated service-name guess) but is a real functional gap until the OS-store format is independently observed and implemented.
+- The streaming state machine's chunk-arrival assumptions (id+name arriving together or id+name-then-arguments, `finish_reason` eventually arriving, at most one usage-bearing chunk) are drawn from the OpenAI Chat Completions API's documented behavior and from vLLM/TGI-style self-hosted servers' typical co-located-usage shape; an OpenAI-shaped backend with a genuinely different chunking discipline (e.g., id and name split across two separate chunks with a content delta between them) has not been tested and could produce a block ordering surprise.
+- `golangci-lint` remains absent from this environment (same gap M1/M2 reported); `go vet ./...` is the only static-analysis signal captured this run.
+
 ## §E.3 Run-phase Audit-Ready Signal
 
-- run_milestone: M2 of M1-M4 (plan.md §D)
-- run_status: milestone-complete — awaiting orchestrator review before M3 (semi-autonomous progression, per spawn instruction)
+- run_milestone: M3 of M1-M4 (plan.md §D)
+- run_status: milestone-complete — awaiting orchestrator review before M4 (semi-autonomous progression, per spawn instruction). This run was interrupted mid-milestone by a host-machine sleep event and resumed from orchestrator-confirmed on-disk state (build/tests clean, no rejection implied).
 - m1_commit_strategy: single milestone commit — `50542c7ff` on branch `worktree-agent-a1ebd35fa5ba3d08b`
-- m2_commit_strategy: single milestone commit — `4407cd82a` on branch `worktree-agent-a1ebd35fa5ba3d08b` (this agent's isolated worktree; NOT pushed to `origin/main` — Tier L routes through `manager-git`/PR per SPEC Phase Discipline Route B, out of this delegation's scope)
-- ac_pass_count (M1+M2-scoped, cumulative): 20 (M1: 7 — AC-PROXY-003, 004, 006, 007a, 007b, 008, 016; M2: 13 — AC-PROXY-001a, 001b, 001c, 002, 005a, 005b, 005c, 005d, 005f, 009 [with-debt], 010, 015a, 015b)
-- ac_fail_count (M1+M2-scoped): 0
-- new_files (M2): internal/proxy/{anthropic_handler,anthropic_handler_coverage,anthropic_handler_test,bedrock,bedrock_aws,bedrock_aws_test,bedrock_test,daemon,daemon_coverage,daemon_holds_all_groups,daemon_lock_unix,daemon_lock_windows,daemon_test,group_selection,group_selection_test,litellm,litellm_health,litellm_health_test,litellm_test,registry_loader_coverage,server,server_test}.go (22 files)
-- modified_files (M2): go.mod, go.sum (added `github.com/aws/aws-sdk-go-v2/{,config,service/bedrockruntime}` per plan.md M2.8 sanction), .moai/specs/SPEC-PROXY-001/progress.md (this file)
-- new_warnings_or_lints_introduced: unknown — `golangci-lint` still not installed in this environment; `go vet ./...` is clean (exit 0). Same residual-risk gap as M1, not newly introduced.
+- m2_commit_strategy: single milestone commit — `4407cd82a` on branch `worktree-agent-a1ebd35fa5ba3d08b`
+- m3_commit_strategy: single milestone commit — `086b9f622` on branch `worktree-agent-a1ebd35fa5ba3d08b` (this agent's isolated worktree; NOT pushed to `origin/main` — Tier L routes through `manager-git`/PR per SPEC Phase Discipline Route B, out of this delegation's scope)
+- ac_pass_count (M1+M2+M3-scoped, cumulative): 25 (M1: 7 — AC-PROXY-003, 004, 006, 007a, 007b, 008, 016; M2: 13 — AC-PROXY-001a, 001b, 001c, 002, 005a, 005b, 005c, 005d, 005f, 009 [with-debt], 010, 015a, 015b; M3: 5 — AC-PROXY-011, 012a, 012b, 013, 014)
+- ac_fail_count (M1+M2+M3-scoped): 0
+- new_files (M3): internal/proxy/{anthropic_handler_openai_test,codex_credentials,codex_credentials_test,codex_group,codex_group_test,openai_compatible,openai_shared,openai_shared_test,translate,translate_stream,translate_stream_test,translate_test}.go (12 files)
+- modified_files (M3): internal/proxy/anthropic_handler.go (openai-compatible/codex dispatch wiring), internal/proxy/anthropic_handler_test.go (M2 unwired-type fixture repointed from codex to copilot per advisor guidance now that codex is wired), .moai/specs/SPEC-PROXY-001/progress.md (this file)
+- new_warnings_or_lints_introduced: unknown — `golangci-lint` still not installed in this environment; `go vet ./...` is clean (exit 0). Same residual-risk gap as M1/M2, not newly introduced.
 - cross_platform_build.linux_darwin: PASS (native `go build ./...`, exit 0)
 - cross_platform_build.windows: PASS (`GOOS=windows GOARCH=amd64 go build ./...`, exit 0)
-- total_run_phase_files (M2): 25 (22 new + 3 modified)
+- total_run_phase_files (M3): 14 (12 new + 2 modified)
 
 ### Gaps (explicitly not observed, M2)
 
@@ -288,6 +417,10 @@ $ grep -rn "AskUserQuestion\|mcp__askuser" internal/proxy/ | grep -v "_test.go" 
 ### Residual risk (M2)
 
 See the M2 subsection's "Residual risk" list above (bedrock EventStream reconstruction, in-process multi-daemon-caller modeling, E2E-vs-real-Claude-Code-client gap, golangci-lint absence). M1's residual-risk item "M2's `-g`/`--set` wiring should add a direct test" is now resolved by `TestResolveActiveGroups_*` (7 tests) — no longer an open item.
+
+### Gaps and Residual risk (M3)
+
+See the M3 subsection's "Gaps" and "Residual risk" lists above — the official-Codex-CLI verification (item 6, SKIPped with an explicit reason) and the codex endpoint (item 7, narrowed but not settled, mitigated via required explicit `base_url`) are the two headline items. Neither M1 nor M2's open residual-risk items are affected by M3's changes (M3's diff is exclusively new files plus the M2-authored `anthropic_handler.go`'s dispatch switch and its M2 test file's unwired-type fixture).
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
