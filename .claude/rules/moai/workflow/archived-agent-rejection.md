@@ -104,6 +104,12 @@ Row 5 above archives the MoAI-custom `claude-code-guide` agent **file** (a forme
 
 ---
 
+### §C.4 `general-purpose` availability precondition
+
+Rows #7-#12 name `general-purpose`, which is guaranteed only in Claude Code's **default** built-in agent class — the `coordinator` and `none` classes omit it, and a spawn naming it there fails with `subagent_type is required`. Both of those classes are entered by an explicit environment-variable opt-in, and no MoAI-launched or MoAI-documented session shape enters either (measured against Claude Code 2.1.235); the class conditions and that measurement are recorded in `.moai/reports/general-purpose-agent-availability.md`.
+
+---
+
 ## §D — Orchestrator Recovery Flow
 
 When the orchestrator detects an `ARCHIVED_AGENT_REJECTED` condition, it follows this recovery flow:
@@ -155,10 +161,10 @@ The following patterns violate the archived-agent rejection contract:
 
 ## §F — Cross-References
 
-- The agent catalog consolidation policy's retain-vs-archive matrix — design-time SSOT for the 8-retain / 12-archive decision with per-agent rationale and Anthropic citations
+- The agent catalog consolidation policy's retain-vs-archive matrix — design-time SSOT for the 8-retain (at decision time; now 10 per CLAUDE.md §4) / 12-archive decision with per-agent rationale and Anthropic citations
 - The agent catalog consolidation policy's design-level migration table (this rule's §C is the canonical runtime SSOT)
 - The offline migration backup location's README — archive backup directory with per-agent README entries
-- `.claude/rules/moai/workflow/orchestration-mode-selection.md` — sibling rule documenting the 5-mode autonomous selection at Phase 0.95 (independent of archived-agent rejection)
+- `.claude/rules/moai/workflow/orchestration-mode-selection.md` — sibling rule documenting the 5-mode autonomous selection at Phase 4 (independent of archived-agent rejection)
 - `.claude/rules/moai/core/agent-common-protocol.md` § User Interaction Boundary — orchestrator-subagent boundary (subagents return blocker reports; orchestrator runs `AskUserQuestion`)
 - `.claude/rules/moai/core/askuser-protocol.md` § ToolSearch Preload Procedure — deferred tool preload contract
 - `.claude/rules/moai/development/agent-patterns.md` § Per-Spawn Domain Specialization — canonical per-spawn-prompt pattern documentation

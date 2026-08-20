@@ -6,7 +6,7 @@
 > user-audience-neutral prose — if your team adopts the pattern, customize the
 > specifics to your environment.
 >
-> Created: 2026-05-25 — per SPEC-V3R6-LOCAL-NAMESPACE-CONSOLIDATION-001 M5
+> Created per the local-namespace consolidation policy.
 > Audience: any MoAI-ADK user project (template-distributed)
 
 ---
@@ -58,7 +58,7 @@ This rule is defined in `.claude/rules/moai/core/agent-common-protocol.md`
 
 **Layer 2 — L2/L3 worktree opt-in (recommended for known multi-session
 patterns)**: If your team works with 2+ sessions on the same project, use
-`/moai plan --worktree` or `moai worktree new SPEC-XXX --base origin/main`
+`moai cc -w <name>` (enter the worktree, then run the phase inside it)
 to materialize a per-SPEC working tree. Memory is still shared, but git
 working trees are separated → race conflict surface drops to zero.
 
@@ -160,18 +160,6 @@ whether to override the template defaults.
   shared multi-developer environments where one developer's auto-accept
   affects review discipline of others.
 
-### `enableAllProjectMcpServers`
-
-- **Template default**: unset (false — only explicitly-enabled MCP servers
-  load)
-- **Common customization**: `true` (auto-enables all MCP servers registered
-  in `.mcp.json`)
-- **When to customize**: project relies on multiple MCP servers (e.g.,
-  context7, browser automation, custom dev tools) and the developer wants
-  them all available without per-session config.
-- **When NOT to customize**: project has many registered-but-unused MCP
-  servers (causes startup latency on each session).
-
 ### `teammateMode` (runtime-managed)
 
 - **Template default**: unset (no teammate mode active)
@@ -197,7 +185,7 @@ whether to override the template defaults.
 
 ### Operating principle
 
-These 4 settings are documented here because user projects commonly need to
+These 3 settings are documented here because user projects commonly need to
 decide whether to customize them. The template ships with safe defaults
 (unset / Claude Code defaults). Your team adopts customizations as needed
 without inheriting maintainer-specific local doctrine.

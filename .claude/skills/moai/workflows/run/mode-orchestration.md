@@ -1,14 +1,14 @@
 ---
-description: "Run Mode Routing — Execution mode gate integration, team mode routing, context propagation, completion criteria, test scenarios, and custom harness extension"
+description: "Run Mode Routing — Execution mode gate integration, mode dispatch routing, context propagation, completion criteria, the verify exit gate of run-phase, test scenarios, and custom harness extension"
 user-invocable: false
 metadata:
   parent: moai-workflow-run
-  phase: "Mode Routing: Execution Mode Gate, Team Mode, Completion, and Scenarios"
+  phase: "Mode Routing: Execution Mode Gate, Mode Dispatch, Completion, and Scenarios"
 ---
 
 # Execution Mode Gate Integration
 
-When the run phase is invoked from plan.md Decision Point 3.5 or moai.md Phase 11.5, the gate passes these parameters:
+When the run phase is invoked from plan.md Decision Point 3.5 or moai.md step 11.5, the gate passes these parameters:
 - `execution_mode`: worktree | team | sub-agent
 - `active_mode`: cc | glm | cg
 - `tmux_available`: true | false
@@ -19,37 +19,37 @@ Proceed with standard sub-agent run phase in the current environment.
 No additional routing needed — CC/GLM/CG env is already configured by the Gate.
 
 **If execution_mode == "team":**
-Apply Team Mode Routing below. The active_mode determines worker model selection:
-- CC: All teammates use Claude (default behavior)
-- GLM: All teammates inherit GLM env from tmux session
-- CG: Leader=Claude (clean session), Workers=GLM (tmux env injected)
+The `team` execution mode is experimental (Agent Teams layer, re-allowed; flag
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` ships on). Run the team-orchestrated
+phase per `orchestration-mode-selection.md` §C.1 constraints (explicit-request
+only; one team per session; no nesting). The `active_mode` (cc / glm / cg) still
+selects the backend; the native `moai cg` teammate runtime is unaffected.
 
 **If execution_mode == "sub-agent":**
-Skip Team Mode Routing. Proceed directly to Phase 1 (Strategy).
+Proceed directly to Phase 5 (Strategy).
 
 **If no execution_mode provided (direct `/moai run` invocation):**
-Apply existing --team/--solo flag logic in Team Mode Routing below.
+Standard sub-agent run phase. A forced `--mode team` selects the Agent Teams
+layer (experimental); `--solo` is the explicit sub-agent selector. Historical:
+the retired era emitted `MODE_TEAM_UNAVAILABLE` and fell back to `autopilot`.
 
 ---
 
-# Team Mode Routing
+# Mode Dispatch (team experimental)
 
-When --team flag is provided or auto-selected, the run phase MUST switch to team orchestration:
+The `--mode team` dispatch value is experimental (re-allowed, operator decision):
+`agent-team` of the Phase
+0.95 catalog is selectable by explicit request
+(`.claude/rules/moai/workflow/orchestration-mode-selection.md` §C.1). Historical:
+the retired era emitted the canonical sentinel `MODE_TEAM_UNAVAILABLE` (per
+`.claude/rules/moai/workflow/spec-workflow.md` § Mode Dispatch) and fell
+back to `autopilot` with a `[mode-auto-downgrade]` info log — the sentinel is
+retained as documented history.
+The native Claude Code teammate runtime (`moai cg` GLM panes, `moai cc -w <name>
+--spawn` teammate windows) is unaffected and sanctioned.
 
-1. Verify prerequisites: workflow.team.enabled == true AND CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 env var is set
-2. If prerequisites met: Read ${CLAUDE_SKILL_DIR}/team/run.md and execute the team workflow (spawn backend-dev + frontend-dev + tester + quality via Agent(name=...) — the team forms implicitly on first spawn)
-3. If prerequisites NOT met: Warn user then fallback to standard sub-agent mode
-
-Team composition: backend-dev (inherit) + frontend-dev (inherit) + tester (inherit) + quality (inherit, read-only)
-
-## Worktree Isolation [HARD]
-
-- [SHOULD] When spawning implementation teammates (backend-dev, frontend-dev, tester) via `Agent(isolation: "worktree")`, Claude Code runtime decides whether to materialize an L1 worktree. MoAI orchestrator does NOT mandate isolation (per the worktree-autonomous user policy).
-- [SHOULD] Read-only teammates (quality) typically do not benefit from `isolation: "worktree"`; omit the flag unless a specific reason applies. `permissionMode: plan` is sufficient.
-- [HARD] All worktree path rules from context-loading.md "Worktree Path Rules [HARD] (All Modes)" section apply to team mode as well
-- After team shutdown, run `git worktree prune` to clean up stale worktree references
-
-For detailed team orchestration steps, see ${CLAUDE_SKILL_DIR}/team/run.md.
+All worktree path rules from context-loading.md "Worktree Path Rules [HARD] (All
+Modes)" continue to apply to every execution mode.
 
 ---
 
@@ -57,10 +57,10 @@ For detailed team orchestration steps, see ${CLAUDE_SKILL_DIR}/team/run.md.
 
 Context flows forward through every phase:
 
-- Phase 1 to Phase 2: Execution plan with architecture decisions guides implementation
-- Phase 2 to Phase 2.5: Implementation code plus planning context enables context-aware validation
-- Phase 2.5 to Phase 3: Quality findings enable semantically meaningful commit messages
-- Phase 2 to /moai sync: Implementation divergence report enables accurate SPEC and project document updates
+- Phase 5 to Phase 11: Execution plan with architecture decisions guides implementation
+- Phase 11 to Phase 13: Implementation code plus planning context enables context-aware validation
+- Phase 13 to Phase 19: Quality findings enable semantically meaningful commit messages
+- Phase 11 to /moai sync: Implementation divergence report enables accurate SPEC and project document updates
 
 ---
 
@@ -68,15 +68,49 @@ Context flows forward through every phase:
 
 All of the following must be verified:
 
-- Phase 1: manager-spec returned execution plan with requirements and success criteria
-- User approval checkpoint blocked Phase 2 until user confirmed
-- Phase 1.5: Tasks decomposed with requirement traceability
-- Phase 1.8: MX context map built for target files (skipped for greenfield)
-- Phase 2: Implementation completed according to development_mode (with MX context)
-- Phase 2.5: sync-auditor (or orchestrator verification batch) completed TRUST 5 validation with PASS or WARNING status
-- Quality gate blocked Phase 3 if status was CRITICAL
-- Phase 3: manager-git created commits (branch or direct) only if quality permitted
-- Phase 4: User presented with next step options
+- Phase 5: manager-spec returned execution plan with requirements and success criteria
+- User approval checkpoint blocked Phase 11 until user confirmed
+- Phase 6: Tasks decomposed with requirement traceability
+- Phase 9: MX context map built for target files (skipped for greenfield)
+- Phase 11: Implementation completed according to development_mode (with MX context)
+- Phase 13: sync-auditor (or orchestrator verification batch) completed TRUST 5 validation with PASS or WARNING status
+- Quality gate blocked Phase 19 if status was CRITICAL
+- Phase 19: manager-git created commits (branch or direct) only if quality permitted
+- Phase 20: Next step honors the pipeline contract — `full-pipeline` auto-chains into `/moai sync` (announced in the transcript); `single-phase` presents sync as the "(Recommended)" first next-step option (never a silent chain)
+
+---
+
+## Verify Exit Gate (factory contract)
+
+The `factory` pipeline contract (`workflows/moai.md` § run→sync chaining policy) adds exactly one stage to run-phase: a security verify stage that is the **exit gate of run-phase**. It is not a sync-phase stage and it is not a new subcommand. Ordering: the gate fires after acceptance-criterion convergence and BEFORE the inherited run→sync auto-chain, and the whole of run-phase — this gate included — is downstream of Implementation Kickoff Approval.
+
+Invocation, verbatim:
+
+```text
+/moai review --security --deep --repo
+```
+
+### Severity partition — three cases, mutually exclusive and jointly exhaustive
+
+Every verify stage lands in exactly one of the three cases below, and in no more than one. Readability is what separates S3 from S2: a stage with no readable result must never be absorbed by the S2 "no confirmed findings" wording, because a gate whose failure mode is *proceed* is not a gate.
+
+| Case | Condition | Route |
+|---|---|---|
+| **S1** | a readable result carrying one or more CONFIRMED findings at `critical` or `high` | the chain **shall not proceed to sync**; the findings **re-enter run-phase scoped to the changed surface** |
+| **S2** | a readable result carrying findings only at `medium` or `low`, or a readable result carrying no confirmed findings at all | proceed to sync, carrying the findings forward as **inherited sync-phase evidence** |
+| **S3** | **no readable result** — the invocation errored, the pipeline aborted, the recorded results directory is absent, or its findings artifact is absent or carries a line that does not parse | **HALT** the chain; it does not proceed to sync |
+
+S1 is the single human gate this contract adds — the operator decides whether to re-enter. S3 **HALT**s, emits the 5-section verdict (Claim / Evidence / Baseline-attribution / Gaps / Residual-risk per `verification-claim-integrity.md` §3), and escalates; an S3 attempt does **not** count against the re-entry ceiling, because a stage that produced nothing consumed none of the re-entry budget.
+
+The chain permits **at most two verify re-entries**. When a third would be required, halt and emit that same 5-section verdict, then escalate.
+
+### Rung attribute — orthogonal to the severity partition
+
+The rigor rung (`PRIMARY`, `FALLBACK`, or `DEGRADED`, as self-labelled by the review degradation ladder) is an **attribute of** an S1 or S2 result, recorded on the factory state record. It is not a fourth case standing beside S1/S2/S3: a readable result with no confirmed findings at the `DEGRADED` rung is S2 *and* `DEGRADED` simultaneously. S3 produced no result and therefore carries no rung at all.
+
+A `DEGRADED` rung (single-pass, no voter panel) is surfaced both in the chain transcript and in the sync report, and forces the sync-phase security-analysis suppression OFF, so the independent adversarial analysis of the same surface still runs.
+
+**Precedence, stated in both directions.** The severity case **governs routing** and the rung never changes it; the rung **governs suppression** and the severity case never relaxes it. An S2 result at the `DEGRADED` rung therefore proceeds to sync with suppression forced off.
 
 ---
 
@@ -85,18 +119,18 @@ All of the following must be verified:
 ## Normal Flow
 **Prompt**: "/moai run SPEC-AUTH-001"
 **Expected Result**:
-- Phase 0.9: Detects Go project (go.mod) → references `.claude/rules/moai/languages/go.md`
-- Phase 0.95: SPEC has 8 files, 2 domains → Standard Mode selected
-- Phase 1: manager-spec creates execution plan with 5 tasks
+- Phase 3: Detects Go project (go.mod) → references `.claude/rules/moai/languages/go.md`
+- Phase 4: SPEC has 8 files, 2 domains → Standard Mode selected
+- Phase 5: manager-spec creates execution plan with 5 tasks
 - Decision Point: User approves plan
-- Phase 2: Implementation via manager-develop (DDD mode)
-- Phase 2.5: TRUST 5 validation passes
-- Phase 3: Commits created on feature branch
+- Phase 11: Implementation via manager-develop (DDD mode)
+- Phase 13: TRUST 5 validation passes
+- Phase 19: Commits created on feature branch
 
 ## Fix Mode Flow
 **Prompt**: "/moai run SPEC-BUG-042" (bug fix SPEC, 2 files affected)
 **Expected Result**:
-- Phase 0.95: SPEC has 2 files, 1 domain → Fix Mode selected
+- Phase 4: SPEC has 2 files, 1 domain → Fix Mode selected
 - Directly spawns manager-develop + orchestrator verification batch (lint + test + coverage)
 - Minimal overhead, fast execution
 - Quality validation still runs
@@ -111,8 +145,7 @@ All of the following must be verified:
 ---
 
 Version: 2.11.0
-Updated: 2026-03-30
-Changes: Added Phase 0.9 JIT Language Detection, Phase 0.95 Scale-Based Mode Selection, test scenarios.
+Changes: Added Phase 3 JIT Language Detection, Phase 4 Scale-Based Mode Selection, test scenarios.
 
 ---
 

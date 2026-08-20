@@ -1,12 +1,15 @@
 ---
 description: Canonical reference for AskUserQuestion-only interaction protocol, ToolSearch deferred-tool preload procedure, and Socratic interview standards
-globs:
 ---
 
 # AskUserQuestion Protocol — Canonical Reference
 
 > This file is the **single source of truth** for AskUserQuestion interaction rules.
 > Cross-referenced by: CLAUDE.md §8, moai-constitution.md §MoAI Orchestrator, agent-common-protocol.md §User Interaction Boundary, output-styles/moai/moai.md §3/§10.
+>
+> **Loading scope**: Intentionally always-loaded (no `paths:` restriction). The orchestrator may compose an `AskUserQuestion` on any non-trivial turn, so the channel-monopoly rule and the ToolSearch deferred-tool preload procedure must be available every session.
+>
+> **Detail companion**: `askuser-protocol-reference.md` (paths-scoped to this file) — recommendation-placement evidence base, preview-field usage catalogue, and the Non-ASCII encoding root-cause mechanism / pollution-loop detail. Read it when those details are needed.
 
 ---
 
@@ -14,32 +17,19 @@ globs:
 
 **AskUserQuestion is the only user-facing question channel.** The MoAI orchestrator MUST route every user-facing question through an `AskUserQuestion` tool invocation. Free-form interrogative prose in the response body is **prohibited** as a question channel.
 
-Applies to all orchestrator turns involving:
-- Clarification questions when user intent is ambiguous (Stage 1 Clarify)
-- Preference and decision questions ("Which approach?", "Continue or abort?")
-- Socratic interview rounds during Context-First Discovery (CLAUDE.md §7 Rule 5)
-- Branch and workflow selection
-- Conflict resolution (merge strategy, rollback confirmation, etc.)
+Applies to all orchestrator turns involving: clarification questions (Stage 1 Clarify), preference/decision questions ("Which approach?", "Continue or abort?"), Socratic interview rounds during Context-First Discovery (CLAUDE.md §7 Rule 5), branch and workflow selection, and conflict resolution (merge strategy, rollback confirmation, etc.).
 
 **Exceptions** (free-form prose questions permitted ONLY when):
-- `AskUserQuestion` is technically unavailable — this should not occur in normal orchestrator operation
+- `AskUserQuestion` is technically unavailable — should not occur in normal orchestrator operation
 - The expression is a statement of status that happens to end with a question mark, not a genuine request for a decision
 
-**Anti-pattern (NEVER repeat)**:
-```
-# Wrong — free-form prose question in response body
-다음 진행 방향을 알려주세요:
-- A: 지금 즉시 시작
-- B: PR ready + 세션 종료
-```
-
-**Correct pattern**: Always use `AskUserQuestion`. See §Free-form Circumvention Prohibition for the "Other" option mechanism.
+**Anti-pattern (NEVER repeat)**: a free-form prose question with a `- A: / - B:` option list in the response body. **Correct pattern**: always use `AskUserQuestion` (see §Free-form Circumvention Prohibition for the "Other" mechanism).
 
 ---
 
 ## ToolSearch Preload Procedure
 
-`AskUserQuestion` is a **deferred tool** in Claude Code. Its JSON schema is NOT loaded into the active context at agent initialization time. Attempting to invoke `AskUserQuestion` without first selecting it results in `InputValidationError: tool not in schema`.
+`AskUserQuestion` is a **deferred tool** in Claude Code. Its JSON schema is NOT loaded into the active context at agent initialization time. Attempting to invoke it without first selecting it results in `InputValidationError: tool not in schema`.
 
 ### Mandatory Preload Step
 
@@ -49,20 +39,11 @@ Immediately before **every** `AskUserQuestion` call, the orchestrator MUST invok
 ToolSearch(query: "select:AskUserQuestion")
 ```
 
-This loads the tool schema into the active context and makes the subsequent `AskUserQuestion` call valid.
-
 ### General Rule for Deferred Tools
 
-Any deferred tool requires a `ToolSearch` select preload before invocation. The pattern generalizes:
+Any deferred tool requires a `ToolSearch` select preload before invocation. The pattern generalizes: `ToolSearch(query: "select:<tool>[,<tool>...]")` — single (`select:AskUserQuestion`) or multiple (`select:AskUserQuestion,TaskCreate`).
 
-```
-ToolSearch(query: "select:<tool>[,<tool>...]")
-```
-
-- Single tool: `ToolSearch(query: "select:AskUserQuestion")`
-- Multiple tools: `ToolSearch(query: "select:AskUserQuestion,TaskCreate")`
-
-### Preload Sequence
+**Preload sequence** (per turn — if a new turn begins and `AskUserQuestion` will be called again, preload again; never reverse or omit Step 1):
 
 ```
 [Turn N]
@@ -70,13 +51,11 @@ Step 1: ToolSearch(query: "select:AskUserQuestion")   ← preload deferred schem
 Step 2: AskUserQuestion({ questions: [...] })           ← now valid to invoke
 ```
 
-Never reverse or omit Step 1. The preload applies per-turn — if a new turn begins and `AskUserQuestion` will be called again, preload again.
-
 ---
 
 ## Socratic Interview Structure
 
-When a Stage 1 Clarify trigger is satisfied (see §Ambiguity Triggers and Exceptions), the orchestrator conducts a **Socratic interview** through sequential `AskUserQuestion` rounds.
+When a Stage 1 Clarify trigger is satisfied (see §Ambiguity Triggers and Exceptions), the orchestrator conducts a **Socratic interview** through sequential `AskUserQuestion` rounds (each round: ToolSearch preload → AskUserQuestion; later rounds build on earlier answers; final round is the confirmation — "Proceed with this plan?").
 
 ### Structural Constraints (all mandatory)
 
@@ -88,16 +67,7 @@ When a Stage 1 Clarify trigger is satisfied (see §Ambiguity Triggers and Except
 6. **Termination condition**: Rounds continue until intent clarity reaches 100%; the interview MUST NOT end prematurely
 7. **Pre-execution confirmation**: After clarity is achieved, consolidate findings into a brief report and obtain **explicit final confirmation** via `AskUserQuestion` before irreversible actions
 
-### Interview-Round Structure Example
-
-```
-Turn 1: ToolSearch → AskUserQuestion (scope questions)
-Turn 2: ToolSearch → AskUserQuestion (approach questions, built on Turn 1 answers)
-...
-Final:  ToolSearch → AskUserQuestion (confirmation: "Proceed with this plan?")
-```
-
-> **Note**: "Interview round" here denotes a turn of Socratic questioning (a generic English usage), NOT the retired SPEC taxonomy term `Round` (within-SPEC SSE-stall sub-division, now folded into `Milestone` per `.claude/rules/moai/development/sprint-round-naming.md`).
+> **Note**: "Interview round" denotes a turn of Socratic questioning (generic English usage), NOT the retired SPEC taxonomy term `Round` (folded into `Milestone` per `.claude/rules/moai/development/sprint-round-naming.md`).
 
 ---
 
@@ -105,177 +75,79 @@ Final:  ToolSearch → AskUserQuestion (confirmation: "Proceed with this plan?")
 
 Every option in an `AskUserQuestion` call MUST have a `description` field populated with sufficient detail for the user to evaluate implications and trade-offs **without consulting external context**.
 
-### Required description content
-
 Each option description MUST include:
-
 1. **Immediate result**: What happens immediately if this option is selected
 2. **Side effects and risks**: Any follow-on consequences, risks, or irreversibility
 3. **Quantitative information** (where applicable): Token cost, latency, file count, etc. (e.g., "saves ~30K tokens", "modifies 5 files")
 
-### Bias Prevention
-
-**bias prevention rule**: Option descriptions MUST use neutral, factual language — no persuasive or deprecating tone
-- The recommendation signal is conveyed **exclusively** through the `(권장)` / `(Recommended)` label suffix on the first option
-- Descriptions must not phrase the recommended option more favorably or the non-recommended options more negatively than the facts justify
-
-**Anti-pattern**: Writing a description that says "This is the best approach because..." — that is bias. State facts only.
+**Bias prevention**: Option descriptions MUST use neutral, factual language — no persuasive or deprecating tone. The recommendation signal is conveyed **exclusively** through the `(권장)` / `(Recommended)` label suffix on the first option; descriptions must not phrase the recommended option more favorably or the non-recommended options more negatively than the facts justify. ("This is the best approach because..." is bias — state facts only.)
 
 ---
 
 ## Recommendation Placement Principles
 
-> 본 규칙은 SPEC-V3R6-ASKUSER-DECISION-MEMORY-001에서 정의됨. recommendation 배치(발화 시점 / 질문 순서 / 추천 옵션 근거 / 전제조건 서술 / 적응형 강도)의 정책 SSOT.
+The `(Recommended)` / `(권장)` label MUST be grounded in the statistically-majority rational default the user has actually been observed to select — never a policy default the system wants to push. Five principles bind its placement; the reasoning, the evidence base, and the worked detail live in `askuser-protocol-reference.md` § Recommendation Placement Principles.
 
-AskUserQuestion의 `(권장)` 라벨은 **사용자가 통계적으로 다수 선택한 합리적 기본값**(선호 메모리에서 관측)에 근거해야 하며, 단순히 시스템이 밀고 싶은 정책 기본값이어서는 안 된다. 본 절은 추천 배치 5원칙을 정의한다.
-
-### 1. 발화 시점 — 정보이익 정렬 (Fisher 정보 I=p(1−p))
-
-**Where** 오케스트레이터가 다가오는 결정에 대해 불확실성 p를 추정하고, **When** p ≈ 0.5 (Fisher 정보 I=p(1−p) 최대, 결정 경계)이면, 오케스트레이터는 해당 질문을 AskUserQuestion으로 발화해야 한다. **While** p가 0 또는 1에 가까우면(거의 확정), 오케스트레이터는 통계적 다수 옵션으로 자동 처리하고 질문을 생략한다.
-
-- p 추정(초기 휴리스틱): 동일 도메인의 관측된 다수 선택 비율. cold-start(관측 < N)는 p ≈ 0.5로 취급해 발화.
-- 근거: just-in-time 결정경계 질문 원칙 (Murphy "Probabilistic Machine Learning" Ch.3 — Fisher 정보 I=p(1−p)는 p=0.5에서 최대).
-- 관측 증거(AC-ADM-005): 결정 로그에 추정 p값 + 발화/생략 결정 기록; p≈0.5 결정 발화율 100%, p>0.8 결정 생략율 ≥ 임계값.
-
-### 2. 질문 순서 — 정보이익 내림차순
-
-**Where** 하나의 AskUserQuestion 호출에 여러 질문이 배치되면, 오케스트레이터는 각 질문의 추정 정보이익을 내림차순으로 정렬한다 (가장 높은 정보이익 질문이 첫 번째).
-
-- 근거: 높은 정보이익 질문을 먼저 배치하면 사용자가 낮은 가치 질문을 만나기 전에 핵심 의사결정을 완료할 수 있다.
-- 관측 증거(AC-ADM-006): AskUserQuestion 호출의 questions 배열 순서 = 추정 정보이익 내림차순; 로그에 순서 결정 근거.
-
-### 3. 추천 옵션 — 통계적 다수 합리적 기본값 (cold-start 공개 의무)
-
-**The recommended option**(첫 옵션, `(권장)` 라벨)은 선호 메모리에서 관측된 **통계적 다수 합리적 기본값**이어야 한다. 시스템이 밀고 싶은 정책 기본값이 아니어야 한다.
-
-**Where** 충분한 관측이 존재하지 않으면(cold-start, 관측 < N), 오케스트레이터는 기존 정적 기본값으로 폴백하고 옵션 description에 **"based on static default, N observations needed for personalization"** (또는 동등한 `conversation_language` 자연어 표현)을 공개해야 한다.
-
-- 근거: 기본값 효과(d≈0.55)는 합리적 기본값에서 성립; 시스템 밀어넣기는 자율성 침식 위험. cold-start 공개는 미관측 추천 금지(verification-claim-integrity §1.1 surface 3)를 만족한다.
-- 관측 증거(AC-ADM-007): 추천 배치 로그에 "recommended=<majority_observed>, basis=<N_observations>, not system_default"; cold-start 시 description에 "based on static default, N observations needed for personalization" 포함.
-
-### 4. 전제조건 서술 — 추천 성립 조건 명시
-
-**추천 옵션의 `description`**은 추천이 성립하는 전제조건을 서술해야 한다. 사용자가 전제 위반 시 추천을 즉시 거부할 수 있도록.
-
-- 형식 권장: `"Recommended when <precondition>"` (en) 또는 동등한 `conversation_language` 표현 — 전제 위반 시 거부가 자명한(trivial) 형태.
-- 근거: 투명성 + 쉬운 opt-out 번들. 전제가 서술되지 않은 추천은 기형적 설계이다.
-- 관측 증거(AC-ADM-008): 각 추천 옵션 description에 "Recommended when <precondition>" 또는 동등 문구 포함; 전제 서술 누락 시 감사 실패.
-
-### 5. 적응형 추천 강도 — 숙련도 기반 자동 분기
-
-**Where** 오케스트레이터가 고숙련도(전문가)를 추정하면(세션 카운트 ≥ 임계값 / 의사결정 일관성 / 명시적 자가 평가 중 ≥1), 오케스트레이터는 **약 추천 강도**(info-centric, 자율성 우선 — `(권장)` 라벨 override 없이 inferred preference를 공개만)를 적용한다.
-
-**Where** 저숙련도(일반 사용자)로 추정되면, 오케스트레이터는 **강 추천 강도**(기본값-like — `(권장)` 라벨 + 투명한 이유)를 적용한다.
-
-- cold-start 보호: 숙련도 추정이 불가능한 초기(세션 카운트 < 임계값)는 neutral 강도로 처리 (inferred preference 기반 `(권장)` 배치 없음).
-- 근거: 전문가에게 강 추천은 info-centric 작업에서 자율성 침식; 일반 사용자에게 약 추천은 결정 피로 가중. 자동 분기가 양쪽을 모두 만족한다.
-- 관측 증거(AC-ADM-017): 숙련도 추정 로그; 전문가 세션에서 `(권장)` override 0건; 일반 사용자 세션에서 `(권장)` + reason 포함.
-- 숙련도 추정 세부는 design.md §A.4.
-
-### Cross-reference
-
-- 발화 시점/질문 순서의 정보이익 근거: design.md §B.2 (상충 증거 양면 문서화).
-- 통계적 다수 추천의 자율성 버퍼: 본 절 §3 + §5 (적응형 강도) + 회복 제어 토글 (요구사항 소관, 본 절 범위 외).
-- 전제조건 서술과 투명성: `verification-claim-integrity.md §1.1 surface 3` (관측되지 않은 추론 주장 금지).
+1. **Emission timing.** Ask when the decision is genuinely uncertain (estimated p ≈ 0.5, where information gain peaks). When the outcome is nearly certain, auto-resolve to the majority option and omit the question.
+2. **Question ordering.** Within one call, order questions by descending information gain — the highest-gain question first.
+3. **Recommended option = observed majority.** Where observations are insufficient (cold start), fall back to the static default AND disclose that in the option description ("based on static default, N observations needed for personalization", or its `conversation_language` equivalent). An undisclosed cold-start recommendation is an unobserved-recommendation claim (`verification-claim-integrity.md` §1.1 surface 3).
+4. **Precondition statement.** The recommended option's `description` MUST state the condition under which the recommendation holds ("Recommended when <precondition>"), so the user can reject it immediately when the precondition does not apply.
+5. **Adaptive strength.** High estimated proficiency → weak recommendation (disclose the inferred preference, omit the label). Low proficiency → strong recommendation (label + transparent rationale). Proficiency unknown (early sessions) → neutral: place no inferred-preference label at all.
 
 ---
 
 ## Preview Field Standards
 
-The `preview` field on each `AskUserQuestion` option renders a multi-line content block in a monospace box alongside the option list. When ANY option in a question has a `preview`, the Claude Code TUI auto-switches to side-by-side layout (vertical option list on the left, focused option's preview on the right).
+The `preview` field renders a monospace block beside the option list, switching the TUI to a side-by-side layout. It **complements** `description` and never replaces it: `description` is always required. Full usage catalogue, format guidance, and a worked example: `askuser-protocol-reference.md` § Preview Field Standards.
 
-This field complements `description` — it does NOT replace it. `description` carries the prose explanation that arrives with every option; `preview` carries the visual artifact (table / mockup / snippet) that benefits from side-by-side comparison.
+- **Use it** when options differ structurally or quantitatively and benefit from visual comparison (SPEC selection, migration strategies, tier envelopes, architecture variants); prefer a consistent key set across all options so deltas scan vertically
+- **Skip it** when labels and descriptions already suffice — yes/no confirmations, permission grants, continue/abort gates
+- [HARD] **Single-select only.** `preview` is silently dropped when `multiSelect: true`. If multi-select is required, put the content in richer `description` text instead
+- **Keep it short.** The preview pane does not scroll; content past roughly 12 lines is truncated with no way to reach it
+- **Bias prevention is inherited.** The recommendation signal is carried *only* by the `(Recommended)` / `(권장)` label; preview content stays neutral and factual
 
-### When to Use (SHOULD)
+---
 
-Apply `preview` when options carry **structural or quantitative differences** that benefit from visual side-by-side comparison:
+## Report-Before-Ask Gate
 
-- Epic entry SPEC selection (Tier / Scope / Files / Risk comparison)
-- Workflow branching decisions (cost / latency / risk trade-offs)
-- Migration strategy selection (rollback path / performance / scope deltas)
-- Architecture decision (component layout / dependency graph variants)
-- Tier classification (Tier S minimal / Tier M standard / Tier L thorough envelope comparison)
+[ZONE:Evolvable] [HARD] A decision-type `AskUserQuestion` whose options derive from investigation results MUST be preceded — in the same turn's response body — by a substantive findings report. Investigation results include: `Agent()` fan-out returns (multi-lens analysis, audits, scans), verification batches, and any multi-source evidence gathering the orchestrator performed before composing the question. Asking the user to choose among options they were never given the evidence to evaluate is a gate violation, even when the AskUserQuestion call itself is structurally compliant (labels, descriptions, previews, `(권장)` placement).
 
-### When NOT to Use
+### Requested-Deliverable Primacy (user requirement analysis first)
 
-Omit `preview` when labels and descriptions already suffice:
+[ZONE:Evolvable] [HARD] When the user's latest message explicitly requests a report, analysis, or explanation ("report on X", "explain why", "analyze this first"), that requested deliverable IS the turn's terminal output: the orchestrator MUST complete the report as a standalone response and end the turn WITHOUT appending a decision-type `AskUserQuestion` to the same turn. Pipeline-stage needs (clarification resolution, scope selection, audit-gate unblocking, next-step routing) NEVER override or preempt the user's stated information request.
 
-- Simple yes/no confirmations
-- PR merge approval
-- Single-decision-point confirmations after the orchestrator has already laid out the structural context in prose
-- Permission grants (e.g., "allow Bash?", "allow Write?")
-- Continue / Abort prompts at a checkpoint gate
+- **Requirement analysis before question composition**: re-read the user's latest message; if it asks for information, deliver the information and stop — ask only when it asks for (or clearly requires) a decision
+- **No question-as-epilogue**: a scope/next-step question appended to a requested report demotes the report to a preamble — deliver the report; let the user respond
+- **Deferred pipeline questions**: pending workflow questions surface in a LATER turn — after the user reacts to the report, or explicitly says to proceed
 
-### Constraint: Single-Select Only
+### Report Completeness Criteria (all mandatory)
 
-`preview` is rendered ONLY when `multiSelect: false`. The Claude Code TUI silently drops the `preview` field when `multiSelect: true`. Do not combine — if multi-select is required, fall back to richer `description` text instead.
+1. **Per-source coverage**: the report names each investigation source (agent, lens, audit dimension) and states its key findings with quantification (N findings, severity/classification breakdown). A single-line completion claim ("investigation complete", in any locale) is NOT a report.
+2. **Option-to-report traceability**: every codename, identifier, or finding referenced in the question's option labels / descriptions / previews MUST have been introduced and explained in the preceding report body — the user cannot evaluate what was never explained.
+3. **Structured rendering**: render the report via the Discovery banner (`.claude/output-styles/moai/moai.md` §8 Discovery Report) or equivalent structured markdown with per-source subsections, scaled to the investigation's size.
 
-### Constraint: Scroll Limitation (Issue #33062)
+### Preview-as-Report Substitution (named anti-pattern)
 
-The Claude Code TUI preview pane is currently NOT scrollable. Content exceeding the visible window is truncated with an "N lines hidden" indicator, and arrow keys only navigate between options on the left (not within the preview pane). Mitigation guidelines (best-effort, not enforced):
+[HARD] Option `preview` / `description` fields MUST NOT be the sole carrier of investigation findings. The preview compresses a comparison; the report explains the evidence. Compressing all findings into an option preview table while the response body carries only a one-line completion claim is the named anti-pattern **preview-as-report substitution**.
 
-- Keep preview content under ~12 visible lines
-- Place the most decision-relevant information in the first 6 lines
-- For longer artifacts (full SPEC body, large diff), condense to a metadata table in `preview` and surface the full content via a follow-up message after selection
+### Report-Promise Fulfillment
 
-Reference: `https://github.com/anthropics/claude-code/issues/33062`
+[HARD] When prior narration in the same task promised a consolidated report ("I will consolidate and report", or its equivalent in any locale), the report MUST be rendered before any subsequent decision AskUserQuestion. Claiming the report was delivered when none was rendered is an unobserved completion claim (`verification-claim-integrity.md` §1.1 surface 1).
 
-### Format Freedom
+### Exceptions (gate does not apply)
 
-`preview` content renders as markdown inside a monospace box. The author may use any visual format that fits the comparison:
+1. Pure clarify rounds during Context-First Discovery — questions asked BEFORE any investigation exists
+2. Confirmation gates on already-reported context (e.g., Implementation Kickoff Approval after plan artifacts were presented in prose)
+3. Blocker re-delegation rounds where the subagent's blocker report was already surfaced
+4. Preference questions with no investigative basis (naming, formatting choices)
 
-- **Compact metadata table** (one `key: value` per line) — preferred for option-set comparison; allows visual scanning of deltas when the same key set appears across all options
-- **ASCII art mockup** — UI layouts, architecture diagrams, component boundaries
-- **Code snippet** (fenced or unfenced) — implementation variants, configuration examples
-- **Mixed** — metadata table plus a small diagram, when both contribute to the decision
+### Pre-emit self-check (report-before-ask) — 5 items
 
-When options carry comparable metadata, prefer a consistent key set across all options' previews so the user can visually scan the deltas. When options are fundamentally different in shape (e.g., "implement now" vs "ASCII mockup of UI"), format freedom is acceptable even if it sacrifices direct comparability.
-
-### Bias Prevention Inheritance
-
-The bias prevention rule from §Option Description Standards applies equally to `preview` content:
-
-- The recommendation signal is conveyed **exclusively** by the `(권장)` / `(Recommended)` label suffix on the first option
-- Preview content MUST use neutral, factual language — no persuasive framing, no decorations privileging one option
-- Do not visually inflate the recommended option's preview (no larger box, no extra emoji, no longer body)
-
-### Worked Example
-
-```
-ToolSearch(query: "select:AskUserQuestion")
-AskUserQuestion({
-  questions: [{
-    question: "Epic 8 entry SPEC를 선택해주세요.",
-    header: "Epic 8",
-    multiSelect: false,
-    options: [
-      {
-        label: "SPEC-V3R6-SPEC-ID-VALIDATION-001 (권장)",
-        description: "manager-spec body에 SPEC ID regex pre-write self-check 추가. Epic 7 TMC-001 plan-phase L51 도출 원천 해소.",
-        preview: "Tier:    S (minimal)\nScope:   manager-spec.md body + regex pre-write check\nFiles:   1-2 edit\nRisk:    Low — agent body 수정, 동작 변경 없음\nL51 origin: Epic 7 TMC-001 plan-phase 도출"
-      },
-      {
-        label: "SPEC-V3R6-CATALOG-FRONTMATTER-AUDIT-001",
-        description: "frontmatter schema audit + lint rule 확장. §24 namespace align 후속.",
-        preview: "Tier:    M (standard)\nScope:   internal/spec/lint.go + catalog.yaml\nFiles:   3-5 edit\nRisk:    Med — lint rule 확장은 cascade 가능\nOrigin:  §24 namespace align 후속"
-      },
-      {
-        label: "SPEC-V3R6-CLI-INTEGRATION-001",
-        description: "CLI subcommand integration test 추가. moai cli regression 방지.",
-        preview: "Tier:    M (standard)\nScope:   cmd/moai + internal/cli integration tests\nFiles:   5-8 edit\nRisk:    Med — sandbox env 의존성 추가 가능\nOrigin:  CI 회귀 방지 SHOULD-FIX"
-      }
-    ]
-  }]
-})
-```
-
-Note how each option's `preview` uses the same key set (`Tier`/`Scope`/`Files`/`Risk`/`Origin`-or-`L51 origin`), allowing the user to scan deltas vertically when navigating the option list.
-
-### Cross-references
-
-- Claude Code SDK documentation: `toolConfig.askUserQuestion.previewFormat` (`"markdown"` | `"html"`). The Claude Code native TUI auto-renders the `preview` field without explicit `previewFormat` config.
-- Constraint origin: GitHub issue `anthropics/claude-code#33062` (preview pane scroll limitation).
-- Related rule: §Option Description Standards (description is always required; preview is additive).
+- [ ] Does the user's latest message request a report / analysis / explanation rather than a decision? If yes, this turn ends with the report — defer this AskUserQuestion to a later turn.
+- [ ] Do this question's options derive from investigation results? If yes, does a substantive report precede this call in the same turn?
+- [ ] Is every codename / identifier appearing in the options explained in the preceding report?
+- [ ] Do the findings live in the response body (not only inside option previews)?
+- [ ] If a report was promised earlier in the task, has it actually been rendered?
 
 ---
 
@@ -291,8 +163,6 @@ The MoAI orchestrator (main session) MUST:
 - Collect all necessary user preferences **before** delegating to subagents
 - On receiving a blocker report from a subagent: run an `AskUserQuestion` round with the user, inject the user's responses into a fresh subagent prompt, and re-delegate
 
-See `.claude/rules/moai/core/askuser-protocol.md` (this file) for the complete preload sequence.
-
 ### Subagent Prohibitions
 
 Subagents invoked via `Agent()` operate in isolated, stateless contexts and CANNOT interact with users directly:
@@ -300,31 +170,9 @@ Subagents invoked via `Agent()` operate in isolated, stateless contexts and CANN
 - [ZONE:Frozen] [HARD] Subagents MUST NOT output free-form prose questions directed at the user
 - [ZONE:Frozen] [HARD] Subagents MUST NOT embed AskUserQuestion call syntax in their response body
 
-### Blocker Report Format
+### Blocker Report Format / Re-delegation Procedure
 
-When a subagent requires user input that was not provided in the spawn prompt, it MUST return a structured blocker report instead of attempting to interact with the user:
-
-```markdown
-## Missing Inputs
-
-The following parameters are required but were not provided:
-
-| Parameter | Type | Expected Values | Rationale |
-|-----------|------|-----------------|-----------|
-| [name]    | [type] | [values]      | [why needed] |
-
-**Blocker**: Cannot proceed without the above inputs. Please re-delegate with these values injected into the prompt.
-```
-
-### Re-delegation Procedure
-
-```
-[Orchestrator receives blocker report]
-Step 1: ToolSearch(query: "select:AskUserQuestion")
-Step 2: AskUserQuestion — ask user for the missing inputs
-Step 3: Construct fresh subagent prompt with user's answers injected
-Step 4: Re-delegate to subagent
-```
+Owned by `.claude/rules/moai/core/agent-common-protocol.md` § Blocker Report Format and § Re-delegation Procedure — see there.
 
 ---
 
@@ -347,6 +195,15 @@ This section is the **single source of truth** for Stage 1 Clarify trigger condi
 4. Command invocation with all required arguments provided — no ambiguity
 5. Continuation of previously confirmed work in the same session — intent already established
 
+### The Unknowns 4-Quadrant Lens
+
+Classify the ambiguity by **user blind spot** (Known-Knowns / Known-Unknowns / Unknown-Knowns / Unknown-Unknowns):
+
+- **Known-Knowns** — stated + confirmed facts. No clarification needed
+- **Known-Unknowns** — gaps the user is aware of. Resolve via a Socratic interview round (§ Socratic Interview Structure)
+- **Unknown-Knowns** — constraints implicit in the codebase the user has not surfaced. Resolve via `Agent(Explore)` read-only reconnaissance, then confirm with the user
+- **Unknown-Unknowns** — risks neither side has articulated. When suspected (unfamiliar domain/subsystem/design territory), run a Blind Spot Pass (§ Blind Spot Pass) before plan-phase entry
+
 ### First-Action Sequence After Trigger
 
 ```
@@ -361,85 +218,63 @@ Trigger detected
 
 ---
 
+## Blind Spot Pass
+
+The **Blind Spot Pass** is an OPTIONAL pre-plan Discovery technique for surfacing the user's **unknown-unknowns**: read-only reconnaissance by `Agent(Explore)`, with findings surfaced to the user through the orchestrator's `AskUserQuestion` channel.
+
+- **When**: the user is working in an **unfamiliar** domain (new subsystem, unfamiliar design/library territory) AND the orchestrator suspects unknown-unknowns — SHOULD run **before plan-phase entry**, before authoring the SPEC. The trigger is a judgment call, NOT an automatic gate; in a familiar domain with no suspected unknown-unknowns, the pass is skipped with no forced overhead.
+- **Mechanism**: (1) spawn `Agent(Explore)` in **read-only** mode to scan the relevant domain (subsystem, library surface, integration points); (2) surface the likely unknown-unknowns through a single `AskUserQuestion` round so the user can react before the plan is authored.
+- **Subagent boundary (preserved)**: `Agent(Explore)` — and any subagent — **does not prompt the user** directly; findings surface only through the orchestrator's channel. A subagent that lacks input returns a blocker report; it never asks the user.
+
+---
+
 ## Free-form Circumvention Prohibition
 
 Free-form interrogative prose in the response body MUST NOT be used as a substitute for `AskUserQuestion` — always use AskUserQuestion.
 
-### Why this matters
+`AskUserQuestion` automatically appends an **"Other"** option to every question set: users preferring free-form answers select "Other" and type their response, so the orchestrator does NOT need free-form questions to support free-form answers. The "Other" mechanism covers edge cases not anticipated in the option list, preferences that do not fit the options, and free-form elaboration on a structured choice.
 
-`AskUserQuestion` automatically appends an **"Other"** option to every question set. This means:
-- Users who prefer free-form answers can select "Other" and type their response
-- The orchestrator does NOT need to produce free-form questions to support free-form answers
-- Structured options via `AskUserQuestion` are faster and less error-prone than prose for most users
+**Prohibited patterns** (all are Channel Monopoly violations):
+- A free-form question in prose ("Which direction would you like to proceed?")
+- A markdown option list in prose (`- **A**: … / - **B**: … / - **C**: …`)
+- An inline question at the end of a response paragraph ("I've completed the changes. Should I create a PR now?")
 
-### The "Other" Mechanism
+**Correct pattern**: `ToolSearch(query: "select:AskUserQuestion")` → `AskUserQuestion({ questions: [{ question, header, options: [{ label: "... (Recommended)", description: "..." }, ...] }] })`.
 
-When the orchestrator constructs an `AskUserQuestion` round that does not exhaustively cover all possibilities, the "Other" option is automatically available. This covers:
-- Edge cases not anticipated in the option list
-- User preferences that do not fit the provided options
-- Free-form elaboration on a structured choice
+### Completion-Report Next-Step Discipline
 
-### Prohibited Patterns
+[ZONE:Evolvable] [HARD] A completion report (a "done" / "All Done" summary) MUST NOT end with a free-form prose next-step question — "What would you like to do next?", "무엇을 도와드릴까요? (예: A / B / C)", or the same idea in any `conversation_language`, optionally trailed by parenthetical or dashed option examples. This is a Channel Monopoly violation even when the report body itself is correct.
 
-```
-# Prohibited — free-form question in prose
-"Which direction would you like to proceed?"
+A completion report has exactly TWO valid closes:
 
-# Prohibited — markdown list as options in prose
-- **A**: Run SPEC immediately
-- **B**: Review first
-- **C**: Abort
+1. **Route a genuine next-step decision through `AskUserQuestion`** — preload, then ask, so the user selects-and-enters instead of typing. The recommended option carries the `(Recommended)` / `(권장)` label.
+2. **Close with NO question** — a clean completion statement (what was done, the evidence, the current state). When no decision is actually required, do NOT manufacture a next-step question; an unneeded prompt is noise.
 
-# Prohibited — inline question at end of response paragraph
-"I've completed the changes. Should I create a PR now?"
-```
+"Ask through `AskUserQuestion`, or do not ask" — there is no third "ask in prose" option. The convenience rationalization "a short trailing next-step question on a finished report can be plain prose" is the exact failure mode this clause forbids.
 
-### Correct Pattern
-
-```
-# Correct — always through AskUserQuestion
-ToolSearch(query: "select:AskUserQuestion")
-AskUserQuestion({
-  questions: [{
-    question: "다음 단계를 선택하세요.",
-    header: "진행 방향",
-    options: [
-      { label: "PR 즉시 생성 (권장)", description: "현재 변경사항으로 PR을 생성합니다. CI가 자동 실행됩니다." },
-      { label: "검토 후 PR", description: "변경사항을 먼저 검토하고 PR을 생성합니다." },
-      { label: "중단", description: "현재 작업을 중단하고 상태를 보존합니다." }
-    ]
-  }]
-})
-```
+**Pre-emit self-check (completion report)** — before sending any "done" report:
+- [ ] Does the report end with a `?`-bearing prose next-step prompt? If yes → convert to `AskUserQuestion`, or drop the prompt entirely.
+- [ ] If a next-step decision is genuinely needed, is it routed through `AskUserQuestion` (not prose, not a markdown option list)?
+- [ ] If no decision is needed, does the report close cleanly with no manufactured question?
 
 ## Non-ASCII Tool-Call Encoding
 
 The `AskUserQuestion` payload — `question`, `header`, and every option `label` / `description` / `preview` — routinely carries text in the user's `conversation_language`. For Korean, Japanese, Chinese, and other multi-byte scripts, this text MUST be written as **native UTF-8 directly** in the tool-call JSON. Hand-authored `\uXXXX` escape sequences are **PROHIBITED**.
 
-### Failure Mode
-
-A malformed escape — a stray space inside the sequence, a truncated code point, or a half-written `\u` — corrupts the JSON so the `questions` array is parsed as a bare string instead of a list of objects. The call is rejected with `Invalid tool parameters` / `InputValidationError`, and the orchestrator's clarification round silently fails on its first attempt.
-
-### Root-Cause Mechanism
-
-The corruption is not random; it follows a three-step chain documented across LLM tool-call runtimes:
-
-1. **Serialization escaping.** A serialization layer emitting JSON with `ensure_ascii`-style escaping converts multi-byte characters into `\uXXXX` sequences (native CJK text becomes a run of `\uXXXX` code points) when a prior tool call or result is recorded into the conversation history.
-2. **Prompt pollution.** That escaped form is fed back into the next inference turn, so the model sees literal `\uXXXX` sequences in its own context instead of native characters.
-3. **Mimicry failure.** The model imitates the escape format for its next tool call but cannot reliably reproduce the exact code points, emitting plausible-looking but corrupted escapes (the stray-space / truncated forms above).
-
-The corrective lever is step 1: keep multi-byte text as native UTF-8 in every tool call so the context is never seeded with `\uXXXX` runs.
+**Failure Mode**: a malformed escape (stray space, truncated code point, half-written `\u`) corrupts the JSON so the `questions` array parses as a bare string — the call is rejected with `Invalid tool parameters` / `InputValidationError`, and the clarification round silently fails on its first attempt. (Root-cause mechanism, the self-reinforcing pollution loop, and the scope note: `askuser-protocol-reference.md` § Non-ASCII Tool-Call Encoding detail.)
 
 ### Directive and Recovery
 
-- **Preventive (always):** write all `conversation_language` text as native UTF-8 in the tool-call JSON — this binds **every** tool call that carries multi-byte text, not only `AskUserQuestion` but Bash commands, Write / Edit content arguments, and any other tool-call payload. Never hand-escape a non-ASCII character.
-- **Recovery (on failure):** if a call is rejected with `Invalid tool parameters` and the payload contained non-ASCII text, re-issue the identical call with the text rewritten as native UTF-8 — do not try to "repair" the escape sequence.
+- **Preventive (always):** write all `conversation_language` text as native UTF-8 in the tool-call JSON — this binds **every** tool call carrying multi-byte text, not only `AskUserQuestion` but Bash commands, Write / Edit content arguments, and any other tool-call payload. Never hand-escape a non-ASCII character.
+- **Recovery (on failure):** if a call is rejected with `Invalid tool parameters` and the payload contained non-ASCII text, re-issue the identical call with the text rewritten as native UTF-8 — do not try to "repair" the escape sequence. Do not carry the corrupted form forward; re-author the next non-ASCII payload from the intended source text, not by transcribing the `\uXXXX` run visible in context. Persistent recurrence within a session → escalate to `/clear` with a paste-ready resume (last-resort loop-break).
 
-### Scope Note
+### Pre-Emit Self-Check (before any tool call carrying non-ASCII text) — 3 items
 
-This is a model-output discipline, not a project-code defect: a correct JSON serializer (for example Go's `encoding/json`) already preserves multi-byte UTF-8 and never emits `ensure_ascii`-style escapes, so it cannot be the pollution source. The discipline binds the orchestrator's own construction of every tool call — `AskUserQuestion`, Bash, Write / Edit, and any other tool whose JSON payload carries non-ASCII text — not just clarification rounds. The `AskUserQuestion` case above is the origin example; a corrupted `\uXXXX` escape in a Bash command or a Write payload fails the same way.
+- [ ] Is every `conversation_language` string in this payload written as native UTF-8 characters (한글 / 日本語 / 中文), with **zero** hand-authored `\uXXXX` sequences?
+- [ ] Am I authoring this text from the intended source meaning, not transcribing an escaped `\uXXXX` run visible in my own context?
+- [ ] If a prior call in this turn already failed with `Invalid tool parameters` on non-ASCII text, have I re-authored — not repaired — this payload, and am I watching for a saturated context that warrants `/clear`?
 
 ---
 
-Version: 1.1.0
+Version: 1.3.0
 Classification: Canonical Reference — do not duplicate content; cross-reference this file instead.

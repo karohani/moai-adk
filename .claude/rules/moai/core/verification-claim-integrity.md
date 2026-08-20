@@ -1,36 +1,42 @@
 # Verification-Claim Integrity
 
-Doctrine establishing the **"no unobserved-verification-claim" invariant** for all MoAI actors. This rule is automatically loaded for the orchestrator and all agents. It is a policy-layer (codification) doctrine — it defines the norm; it does not itself run a runtime detector.
+Doctrine establishing the **"no unobserved-verification-claim" invariant** for all MoAI actors. This rule is automatically loaded for the orchestrator and all agents. It is a policy-layer doctrine — it defines the norm; it does not itself run a runtime detector.
 
-> Provenance: SPEC-EVIDENCE-CLAIM-INVARIANT-001 (IMP-06 of the fable-ish 13-agent "Verify, Don't Assume" analysis roadmap). The complementary mechanical advisory detection layer for one shape of this invariant's violation (code-session false-success) lives in SPEC-STOP-EVIDENCE-GATE-001 (IMP-02/03) — runtime, advisory, warn-first, fail-open. The two layers are complementary: this doctrine codifies the policy; that runtime gate detects one shape of its violation.
+> The motivating defect class is general: an actor claiming a verification or completion it did not actually observe. A complementary runtime layer (advisory, warn-first, fail-open) may detect one shape of this violation; this doctrine codifies the policy norm that binds every actor regardless of whether such a runtime layer is present.
 
-## 1. The Invariant — no unobserved-claim (verification OR defect)
+## 1. The Invariant — no unobserved-claim (verification, defect, OR premise)
 
-[ZONE:Evolvable] [HARD] An actor MUST NOT assert a verification, a completion, **OR a defect / debt / drift** it did not actually verify with the domain's mechanical tooling.
+[ZONE:Evolvable] [HARD] An actor MUST NOT assert a verification, a completion, **a defect / debt / drift, OR the premise underlying a recommendation** it did not actually verify with the domain's mechanical tooling.
 
 > **Evidence absent ≠ evidence of success — NOR of failure.**
 
-The absence of a failure signal is not, by itself, evidence that a check passed. A claim of "tests pass", "coverage 87%", "lint clean", or "0 0 sync" is only valid when the actor actually ran the command and observed its output. An unran command, a skipped step, or a silent assumption is a gap — never a pass.
+The absence of a failure signal is not, by itself, evidence that a check passed. A claim of "tests pass", "coverage met", "lint clean", or "remote in sync" is only valid when the actor actually ran the command and observed its output. An unran command, a skipped step, or a silent assumption is a gap — never a pass.
 
-Symmetrically, inferring a defect, a technical-debt item, a lifecycle drift, or an anomalous state from frontmatter text, grep matches, or file absence alone — without running the domain's dedicated verification tool — is not evidence that the defect exists. A text-pattern inference is a hypothesis, never a verified defect. The invariant binds both directions: an actor may not claim success it did not observe, and may not claim a defect it did not verify with the appropriate tool.
+Symmetrically, inferring a defect, a technical-debt item, a drift, or an anomalous state from text patterns, grep matches, or file absence alone — without running the domain's dedicated verification tool — is not evidence that the defect exists. A text-pattern inference is a hypothesis, never a verified defect. The invariant binds both directions: an actor may not claim success it did not observe, and may not claim a defect it did not verify with the appropriate tool.
 
-This is a policy-layer norm, not a mechanical guarantee. For the complementary mechanical-detection layer that surfaces one shape of this violation at runtime, cross-reference SPEC-STOP-EVIDENCE-GATE-001 (see Cross-References below).
+The binding extends to the premise beneath a recommendation. A recommendation to KEEP, retain, or preserve something rests on a premise — that the thing is still live, still reachable, still depended upon. Observing that an artifact is *referenced* establishes only that a reference exists; it does not establish that the referenced capability is still live. **Reachability is not justification.** Before recommending retention, the actor MUST verify the referenced capability's lifecycle status — whether its producer still exists, and whether a completed retirement already covers it. An unverified premise dressed as a reason is an unobserved claim.
 
-### 1.1 Binding scope — ALL THREE surfaces
+This direction is the more dangerous one, because its failure is silent. A wrong "remove it" claim is contradicted by the next build or test run; a wrong "keep it" claim preserves dead code and is never contradicted by any signal at all.
 
-The invariant binds **all three** of the following surfaces. Each is named explicitly so none can claim exemption:
+This is a policy-layer norm, not a mechanical guarantee. A complementary mechanical-detection layer may surface one shape of this violation at runtime, but the norm binds every actor independently of that layer.
 
-1. **Orchestrator self-report** — the orchestrator's own Completion Report and Verification Matrix banners, and its Trust-but-verify batches, as defined in `.claude/output-styles/moai/moai.md` §8 (Response Templates). When the orchestrator renders a Verification Matrix or Completion Report banner, every row it marks PASS MUST correspond to an actually-observed command output.
+### 1.1 Binding scope — ALL FOUR surfaces
 
-2. **Manager-agent completion report** — the `§E` self-verification (E1-E7) of `manager-develop` and `manager-docs`. When a manager agent reports an AC PASS/FAIL matrix (E1), cross-platform build result (E2), coverage (E3), subagent-boundary grep (E4), lint status (E5), or push state (E6), each reported result MUST be the verbatim output of a command the agent actually ran — not a summary, not an assumption, not a carry-over from a prior unrelated run.
+The invariant binds **all four** of the following surfaces. Each is named explicitly so none can claim exemption:
 
-3. **Defect / debt / drift identification claim** — any actor's assertion that a defect, technical-debt item, lifecycle drift, or anomalous state EXISTS and warrants action. A claim that "SPEC X is a close debt", "package Y has a coverage gap", or "N SPECs need Mx-close" is only valid when the actor ran the domain's dedicated verification tool (`moai spec audit`, `go test -cover`, `golangci-lint`, etc.) and observed its output. Inferring a defect from frontmatter text, grep matches, or file absence alone — without the dedicated tool — is an unobserved defect claim, and acting on it as if it were verified violates §2's attribution requirement. When a dedicated tool exists for a domain, text-only reasoning MUST NOT be the sole basis for a defect claim; the tool's output is the Evidence (§3.2).
+1. **Orchestrator self-report** — the orchestrator's own Completion Report and Verification Matrix banners, and its trust-but-verify batches, as defined in `.claude/output-styles/moai/moai.md` (Response Templates). When the orchestrator renders a Verification Matrix or Completion Report banner, every row it marks PASS MUST correspond to an actually-observed command output.
+
+2. **Manager-agent completion report** — the self-verification deliverables of `manager-develop` and `manager-docs`. When a manager agent reports an acceptance-criteria PASS/FAIL matrix, a build result, coverage, a boundary grep, lint status, or push state, each reported result MUST be the verbatim output of a command the agent actually ran — not a summary, not an assumption, not a carry-over from a prior unrelated run.
+
+3. **Defect / debt / drift identification claim** — any actor's assertion that a defect, technical-debt item, drift, or anomalous state EXISTS and warrants action. A claim that "module X is broken", "package Y has a coverage gap", or "N items are stale and need cleanup" is only valid when the actor ran the domain's dedicated verification tool (the project's audit / lint / type-check / coverage command) and observed its output. Inferring a defect from text patterns, grep matches, or file absence alone — without the dedicated tool — is an unobserved defect claim, and acting on it as if it were verified violates §2's attribution requirement. When a dedicated tool exists for a domain, text-only reasoning MUST NOT be the sole basis for a defect claim; the tool's output is the Evidence (§3.2).
+
+4. **Recommendation-premise claim** — any actor's assertion of the REASON a proposed action should, or should NOT, be taken. A recommendation such as "removing this withdraws a live feature", "this is still in use", or "another consumer depends on it" is only valid when the actor verified the named premise — the producer's existence, the consumer's reachability, the owning task's lifecycle status — and observed the result. Two inferences are specifically forbidden as premise evidence: a reference existing is NOT evidence the referent is live (§1), and an originating task still reading as in-service is NOT evidence the feature it delivered survived, because a later task may have retired it. When an actor recommends AGAINST a user's stated instruction, the premise for that objection carries the same evidence burden as a defect claim (surface 3).
 
 ## 2. Baseline-Integrity Attribution / baseline 무결성 귀속
 
 [ZONE:Evolvable] [HARD] Every verification claim MUST be attributed to an actually-measured baseline — the command that was run plus the output that was observed.
 
-A claim MUST NOT be assumed, and MUST NOT be carried over from a prior unrelated measurement. "Coverage is 87%" attributed to a baseline means: the actor ran `go test -cover ./internal/<pkg>/...` (the command) and observed `coverage: 87.0% of statements` (the output) in this run, against this tree. A number remembered from a different SPEC, a different package, or a different point in time is NOT a baseline — it is a carry-over, and using it as if it were a fresh measurement violates this attribution requirement.
+A claim MUST NOT be assumed, and MUST NOT be carried over from a prior unrelated measurement. "Coverage is at threshold" attributed to a baseline means: the actor ran the coverage command and observed the coverage figure in this run, against this tree. A number remembered from a different task, a different package, or a different point in time is NOT a baseline — it is a carry-over, and using it as if it were a fresh measurement violates this attribution requirement.
 
 Concretely, an attributed claim names:
 
@@ -49,7 +55,7 @@ What is being asserted. The completion or verification statement, phrased as a d
 
 ### 3.2 Evidence (증거)
 
-The actual command that was run **plus its verbatim output** — not a summary. If the claim in §3.1 is "tests pass", the Evidence section contains the literal command (`go test ./...`) and the literal output block it produced. Summarized evidence ("all tests passed") is NOT acceptable as Evidence — the verbatim output is the load-bearing artifact.
+The actual command that was run **plus its verbatim output** — not a summary. If the claim in §3.1 is "tests pass", the Evidence section contains the literal command and the literal output block it produced. Summarized evidence ("all tests passed") is NOT acceptable as Evidence — the verbatim output is the load-bearing artifact.
 
 ### 3.3 Baseline-attribution (baseline 귀속)
 
@@ -61,27 +67,35 @@ What was explicitly **NOT** observed — the negative space. This is the key def
 
 ### 3.5 Residual-risk (잔여 위험)
 
-Remaining uncertainty and deferred verification — the risk that survives even after the observed evidence. Distinct from Gaps (§3.4, what was not observed): Residual-risk is what could still be wrong despite what WAS observed (flaky tests, environment-specific behavior, deferred AC, time-of-check-to-time-of-use windows, etc.).
+Remaining uncertainty and deferred verification — the risk that survives even after the observed evidence. Distinct from Gaps (§3.4, what was not observed): Residual-risk is what could still be wrong despite what WAS observed (flaky tests, environment-specific behavior, deferred criteria, time-of-check-to-time-of-use windows, etc.).
 
 ## 4. Cross-References (SSOT — cross-reference only, do not duplicate)
 
 This doctrine cross-references the following canonical surfaces. It does NOT copy their content — each remains the single source of truth for its own subject:
 
 - `.claude/rules/moai/core/agent-common-protocol.md` § Skeptical Evaluation Stance — the fresh-judgment auditor stance (treat claims as suspect until evidence is shown).
-- `.claude/rules/moai/core/moai-constitution.md` § Agent Core Behaviors #6 "Verify, Don't Assume" — the cross-cutting HARD behavior requiring evidence of completion.
-- `.claude/rules/moai/development/manager-develop-prompt-template.md` § E (Self-Verification Deliverables, E1-E7) — the manager-agent §E self-verification matrix that the 5-section format generalizes and relates to.
+- `.claude/rules/moai/core/moai-constitution.md` § Agent Core Behaviors "Verify, Don't Assume" — the cross-cutting HARD behavior requiring evidence of completion.
+- `.claude/rules/moai/development/manager-develop-prompt-template.md` § E (Self-Verification Deliverables) — the manager-agent self-verification matrix that the 5-section format generalizes and relates to.
 - `.claude/rules/moai/workflow/verification-batch-pattern.md` — the orchestrator-side read-only verification batching pattern (the mechanism by which observed evidence is gathered efficiently).
-- `.claude/output-styles/moai/moai.md` §8 — the Verification Matrix and Completion Report banners (the orchestrator self-report surface bound by §1.1).
+- `.claude/output-styles/moai/moai.md` — the Verification Matrix and Completion Report banners (the orchestrator self-report surface bound by §1.1).
 
-## 5. Worked Example — Defect-Claim Hazard (2026-06-17)
+## 5. Worked Example — Defect-Claim Hazard
 
-A status report counted 29 SPECs with `status: implemented` and an absent `era:` frontmatter field. From frontmatter text alone, the reporter inferred "these 29 are V3R6 SPECs with a missing close (the legacy 'Mx-phase close' inference — the reporter assumed a separate Mx-phase close commit was required)" and proposed batch-closing all 29.
+A status report counted N items matching a text pattern (for example, a metadata field absent from N files) and inferred "these N items are debt requiring action" — then proposed batch-modifying all N.
 
-This was an unobserved defect claim. The reporter had NOT run the domain's dedicated verification tool. When `moai spec audit --json` was finally run, its mechanical era classification showed all 29 were grandfather era (`V3R2-R4` 28 + `V2.x` 1) — `era_final: true`, protected, not subject to V3R6 3-phase close (plan→run→sync) — and MUST-FIX drift across the entire catalog was 0. The inferred "close debt" did not exist; had the batch-close proceeded, 29 grandfather-protected SPECs would have been touched for no reason.
+This was an unobserved defect claim: the domain had a dedicated verification tool, and it had not been run. The text pattern was compatible with two contradictory interpretations (items legitimately in a protected or legacy state versus items with a genuinely missing step); only the dedicated tool could disambiguate. When the tool was finally run, the inferred debt did not exist — the items were in their correct state — and had the batch modification proceeded, N items would have been touched for no reason.
 
-Lesson codified: **a defect claim is a hypothesis until the domain's tool confirms it.** The `era:`-absent + `implemented` text pattern was compatible with two contradictory interpretations (grandfather legacy vs. modern close-debt); only the dedicated tool could disambiguate. Whenever a domain verification tool exists (`moai spec audit` for SPEC lifecycle, `go test -cover` for coverage gaps, `golangci-lint` for code defects), its output MUST precede any defect/debt/drift claim — §1.1 surface 3 + §2 attribution.
+Lesson codified: **a defect claim is a hypothesis until the domain's tool confirms it.** Whenever a domain verification tool exists (an audit command, a type checker, a linter, a coverage tool), its output MUST precede any defect / debt / drift claim — §1.1 surface 3 + §2 attribution. Text-pattern matching alone produces a candidate defect, never a verified one.
+
+## 6. Worked Example — Retention-Claim Hazard
+
+A user instructed that a directory of retired artifacts be removed. The actor deleted the artifacts but held one item back — a scan in a shipped workflow file that globbed for files under that directory — on the stated premise that removing it "would withdraw a live feature from every distributed user", and recommended a separate retirement task instead.
+
+That premise was never checked. The actor had verified the scan was *reachable* (the workflow's routing table points at it) and had read that the task which originally delivered the feature still carried an in-service status, then treated both facts as evidence the feature was live. Neither establishes that. When the producers were finally enumerated, every one was already gone: the command that invoked the feature, its workflow file, its dedicated agent, its CLI entry point, the flag that consumed its output, the template scaffold that created the directory, and its documentation pages in every locale. A completed retirement task had removed the feature from the template source permanently, for all distributed users, and a later cleanup commit had swept the orphans that retirement left behind. The scan simply survived both passes. With no producer and no scaffold, the glob could only ever return zero on a user's machine.
+
+Lesson codified: **reachability is not justification, and an originating task still reading as in-service is not proof the feature it delivered is still live** — a later task may have retired it. Before recommending retention against an instruction, enumerate the producers of the thing being retained and check for a completed retirement; an objection whose premise was never verified is an unobserved claim — §1.1 surface 4 + §2 attribution.
 
 ---
 
-Version: 1.1.0
+Version: 1.2.0
 Classification: Canonical Reference (policy-layer codification) — do not duplicate cross-referenced content; cross-reference this file instead.

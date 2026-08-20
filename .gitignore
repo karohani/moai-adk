@@ -2,7 +2,6 @@
 # MoAI-ADK Package Distribution .gitignore
 # ============================================
 # Version: 0.33.0
-# Updated: 2026-01-10
 # Purpose: Essential patterns for user projects
 # ============================================
 
@@ -104,7 +103,8 @@ ehthumbs.db
 # Logs & Temporary Files
 # ===========================================
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 *.tmp
 *.temp
 *.bak
@@ -165,6 +165,18 @@ secret-*.*
 .aws/config
 .aws/credentials
 
+# MoAI git-credential runtime files (defense-in-depth). The reconfigure wizard
+# delegates git provider credentials to the gh/glab CLI and never writes an
+# access token to a tracked config; these patterns ensure that if a
+# credential-bearing runtime file is ever introduced under .moai/, it is not
+# committed.
+.moai/**/credentials.yaml
+.moai/**/*.credentials
+
+# MINK agent credentials (plaintext API keys, per AC-CR-026).
+# Ignored anywhere in the tree so per-project auth dirs are never committed.
+**/.mink/auth/
+
 # ===========================================
 # Claude Code Configuration
 # ===========================================
@@ -194,8 +206,15 @@ secret-*.*
 .moai/branches/
 
 # ===========================================
+# Update Noise-Suppression Ledgers (per-machine, never tracked)
+# Per-machine state + cache ledgers used to suppress redundant update noise.
+# ===========================================
+.moai/state/
+.moai/cache/
+
+# ===========================================
 # Plan Audit Reports (local artifacts)
-# See SPEC-WF-AUDIT-GATE-001
+# Plan-audit verdict reports are local artifacts; only .gitkeep is tracked.
 # ===========================================
 .moai/reports/plan-audit/*.md
 !.moai/reports/plan-audit/.gitkeep
@@ -206,20 +225,6 @@ secret-*.*
 # ===========================================
 .moai/evolution/telemetry/*.jsonl
 !.moai/evolution/telemetry/.gitkeep
-
-# ===========================================
-# Harness Auto-Generated Data (local-only)
-# observations / usage-log / learning-history are runtime artifacts
-# ===========================================
-.moai/harness/observations.yaml
-.moai/harness/usage-log.jsonl
-.moai/harness/learning-history/
-
-# ===========================================
-# Build Test Artifacts (local-only)
-# i18n-validator: 3.4MB build output, test scope only
-# ===========================================
-/i18n-validator
 
 # ===========================================
 # Node.js (for docs/Nextra)
@@ -256,9 +261,7 @@ coverage.out
 internal/cli/.claude/
 internal/cli/.moai/
 pencil/
-.moai/cache/
 .moai/logs/
-.moai/state/
 .moai/reports/*.md
 .moai/research/cc-update-*.md
 .moai/temp/

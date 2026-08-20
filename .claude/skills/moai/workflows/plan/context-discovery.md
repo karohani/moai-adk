@@ -1,68 +1,17 @@
 ---
-description: "Plan Phase 0/1A/0.3 — Brain proposal detection, project exploration, and clarity evaluation before deep research begins"
+description: "Plan Phase 2/3 — Project exploration and clarity evaluation before deep research begins"
 user-invocable: false
 metadata:
   parent: moai-workflow-plan
-  phase: "Phase Step 0 / Phase 1A / Phase 0.3: Context Discovery and Clarity Evaluation"
+  phase: "Phase 2 / Phase 3: Context Discovery and Clarity Evaluation"
 ---
 
 <!-- TRACE PROBE: workflow-split baseline trace mechanism -->
 <!-- Activated by MOAI_TRACE_PHASES=1 environment variable -->
 
-## Brain Context Auto-Detection
-
-<!-- Verifies: SPEC Decomposition Candidates surfaced to user via AskUserQuestion -->
-<!-- Verifies: /moai plan detects proposal.md and presents SPEC candidates -->
-
-When `/moai plan` is invoked (with or without arguments), perform this pre-execution check:
-
-### Step 0: Brain Proposal Detection
-
-1. **Scan** for `.moai/brain/IDEA-*/proposal.md` files (Glob: `.moai/brain/IDEA-[0-9]*/proposal.md`).
-2. If any proposal.md files are found:
-   a. Read the most recent file (highest IDEA-NNN number by directory name).
-   b. Parse the `### SPEC Decomposition Candidates` section using grammar:
-      ```
-      Grammar: ^- SPEC-[A-Z][A-Z0-9]+-[0-9]{3}: .+$
-      ```
-   c. Collect all matching entries as `brain_candidates`.
-   d. Non-matching entries emit a WARNING in output (but do NOT error out — defensive parser).
-
-3. If `brain_candidates` is non-empty AND user did not provide a specific SPEC title in $ARGUMENTS:
-   - Surface candidates via AskUserQuestion (per `askuser-protocol.md`):
-     ```
-     ToolSearch(query: "select:AskUserQuestion")
-     AskUserQuestion({
-       questions: [{
-         header: "Brain 워크플로우 SPEC 후보",
-         question: "Brain 워크플로우에서 생성된 SPEC 분해 후보가 있습니다. 어느 것을 계획하시겠습니까?",
-         options: [
-           { label: "<first candidate> (권장)", description: "Brain IDEA에서 자동 감지된 첫 번째 후보" },
-           { label: "<second candidate>", description: "..." },
-           ...up to 4 options total (use "직접 입력" as last option for custom SPEC title)
-         ]
-       }]
-     })
-     ```
-   - User selection becomes the SPEC title for Phase 1B.
-   - [HARD] NEVER auto-create SPECs from candidates — user MUST select explicitly.
-
-4. If user provided a specific SPEC title OR selected "직접 입력": proceed normally to Phase 1A.
-
-5. If no brain candidates found: skip this check, proceed normally.
-
-**Defensive Parser Rules**:
-- Entries matching the grammar are offered as candidates.
-- Entries NOT matching (e.g., `- AUTH-001: missing prefix`, `- SPEC-001: missing domain`) emit:
-  `[WARNING] Skipped malformed brain candidate: "<entry>" — expected format: - SPEC-{DOMAIN}-{NNN}: {scope}`
-- Parser warnings do NOT block plan execution.
-- Maximum 9 candidates surfaced (AskUserQuestion option limit: 4 per question, minus "직접 입력").
-
----
-
 ## Phase Sequence
 
-### Phase 1A: Project Exploration (Optional)
+### Phase 2: Project Exploration (Optional)
 
 Agent: Explore subagent (read-only codebase analysis)
 
@@ -84,9 +33,9 @@ Tasks for the Explore subagent:
 - Read target directories in depth — understand deeply how each module works, its intricacies and side effects
 - Study cross-module interactions in great detail — trace data flow through the system
 - Go through related test files to understand expected behavior and edge cases
-- Report comprehensive results for Phase 1B context
+- Report comprehensive results for Phase 8 context
 
-### Phase 0.3: Clarity Evaluation (Conditional)
+### Phase 3: Clarity Evaluation (Conditional)
 
 Purpose: Evaluate how clearly the user's request is specified before beginning deep research. A vague request produces a weaker SPEC; this phase detects vagueness early and gathers missing context through a structured interview.
 
@@ -116,8 +65,8 @@ Evaluate the user's input against five dimensions:
 
 Log the score: "Clarity score: {N}/10 — proceeding with {M} interview round(s)."
 
-If score is 1-3: Use a single AskUserQuestion asking for a clearer description, then re-evaluate. Do not enter the full interview loop.
+If score is 1-3: Preload `ToolSearch(query: "select:AskUserQuestion")`, then use a single AskUserQuestion asking for a clearer description, then re-evaluate. Do not enter the full interview loop.
 
 ---
 
-**Next phase:** Read `workflows/plan/clarity-interview.md` to continue with Phase 0.3.1 Deep Interview Loop.
+**Next phase:** Read `workflows/plan/clarity-interview.md` to continue with Phase 4 Deep Interview Loop.

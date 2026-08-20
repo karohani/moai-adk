@@ -1,16 +1,16 @@
 ---
-description: "Run Phase 0.5~1.8 — Plan Audit Gate, environment assessment, JIT language detection, scale-based mode, analysis/planning, task decomposition, and development mode routing"
+description: "Run Phase 1~1.8 — Plan Audit Gate, environment assessment, JIT language detection, scale-based mode, analysis/planning, task decomposition, and development mode routing"
 user-invocable: false
 metadata:
   parent: moai-workflow-run
-  phase: "Phase 0.5-1.8: Phase Sequence and Preparation"
+  phase: "Phase 1-1.8: Phase Sequence and Preparation"
 ---
 
 # Phase Sequence
 
 All phases execute sequentially. Each phase receives outputs from all previous phases as context.
 
-## Phase 0.5: Plan Audit Gate
+## Phase 1: Plan Audit Gate
 
 **Purpose**: Mandatory independent audit of plan artifacts before any implementation begins.
 Prevents unreviewed, incomplete, or non-compliant SPEC documents from entering Phase 1.
@@ -20,27 +20,36 @@ Source: the plan audit gate contract.
 
 ### Step 1: Compute Plan Artifact Hash (Cache Key)
 
-Compute a combined SHA-256 hash of all plan artifacts present in `.moai/specs/<SPEC-ID>/`:
-- `spec.md` (required)
-- `plan.md` (if present)
-- `acceptance.md` (if present)
-- `tasks.md` (if present)
+Compute a combined SHA-256 hash of all plan artifacts present in `.moai/specs/<SPEC-ID>/`.
+The hash subject set and tier-conditional inclusion are owned by the canonical
+contract in `.claude/rules/moai/workflow/spec-workflow.md` § Report Persistence
+("Plan-artifact hash subject list (Go verbatim)"); consult that contract for the
+authoritative subject list rather than restating it here. The Go implementation
+is `internal/runtime/audit_cache.go` `ComputeHash`, which hashes the
+whitespace-normalized UTF-8 content of each present subject file (missing files
+are skipped, making inclusion tier-conditional by construction).
 
-Hash algorithm: SHA-256 of the UTF-8 content of each file, sorted by filename, concatenated.
-Whitespace normalization: collapse all runs of whitespace to a single space before hashing (whitespace-insensitive cache).
 Store hash as `plan_artifact_hash` for Step 2 cache lookup.
 
-### Step 2: Check 24-Hour Audit Cache
+### Step 2: Consult the Sticky (Hash-Keyed) Audit Cache
 
-Read `.moai/reports/plan-audit/<SPEC-ID>-<YYYY-MM-DD>.md` (today's date).
+The cache is **sticky (hash-keyed)**: a cached PASS verdict whose
+`plan_artifact_hash` matches the current hash is valid regardless of elapsed
+time. SPEC-AUDIT-SNAPSHOT-001 (A1) retired the prior 24h age condition; the
+single authoritative skip contract (the three conditions: verdict PASS, score
+≥ per-tier threshold, artifact-hash unchanged) lives in
+`.claude/rules/moai/workflow/spec-workflow.md` § Phase Transitions / Plan Audit
+Gate skip policy. This step CITES that contract — it MUST NOT restate a
+divergent condition set.
 
-Cache HIT conditions (all must be true):
-1. File exists and the most recent audit run entry has `verdict: PASS`
-2. `plan_artifact_hash` in the cached entry matches `plan_artifact_hash` from Step 1
-3. `audit_at` timestamp in the cached entry is within 24 hours of now (UTC)
+Read `.moai/reports/plan-audit/<SPEC-ID>-<YYYY-MM-DD>.md` (today's date) and
+apply the canonical three-condition skip predicate. The Go helper
+`internal/runtime.SkipEligibleByScore(tier, score)` codifies condition 2
+(per-tier PASS threshold: S 0.75 / M 0.80 / L 0.85; the retired flat `≥ 0.90`
+predicate is NOT consulted).
 
-If cache HIT:
-- Log: `[plan-audit] cache hit (verdict=PASS, age=<Nh>)`
+If cache HIT (all three canonical conditions hold):
+- Log: `[plan-audit] cache hit (verdict=PASS, sticky)`
 - Append to `.moai/specs/<SPEC-ID>/progress.md`: `- audit_cache_hit: true` and `- cached_audit_at: <T0>`
 - Skip Step 3 and proceed to Phase 1.
 
@@ -64,7 +73,7 @@ Timeout: 60 seconds. On timeout, treat as INCONCLUSIVE (Step 4d).
 Read the verdict from the report file produced by plan-auditor.
 
 **4a. PASS**
-- Log: `[plan-audit] verdict=PASS, persisted to progress.md, proceeding to Phase 1`
+- Log: `[plan-audit] verdict=PASS, persisted to progress.md, proceeding to Phase 5`
 - Proceed to Step 5 (persist), then continue to Phase 1.
 
 **4b. FAIL (and grace window ACTIVE — today < merge_date + 7 days)**
@@ -73,12 +82,12 @@ Read the verdict from the report file produced by plan-auditor.
 - If `MOAI_AUDIT_GATE_T0` env var is set, use it as T0 override (test injection).
 - Emit warning to stdout: `[grace-window] D-<N> (auto-block activates at T0+7)`
 - Record `audit_verdict: FAIL_WARNED` in progress.md.
-- Proceed to Phase 1 (warn-only, not blocked).
+- Proceed to Phase 5 (warn-only, not blocked).
 
 **4c. FAIL (and grace window EXPIRED — today >= merge_date + 7 days)**
 - Log: `[plan-audit] verdict=FAIL, blocking Run phase, report=<path>`
 - Surface the audit report path and the list of must-pass failures to stdout.
-- Do NOT proceed to Phase 1 automatically.
+- Do NOT proceed to Phase 5 automatically.
 - [HARD] Present options to user via AskUserQuestion (orchestrator responsibility):
   - Option 1 (Recommended): Revise SPEC — fix the defects, then re-run `/moai run`
   - Option 2: Override and proceed — skip the gate (sets `--skip-audit` implicitly, records BYPASSED)
@@ -137,7 +146,7 @@ When the user passes `--skip-audit` flag OR sets `MOAI_SKIP_PLAN_AUDIT=1` env va
    bypass_user: <user.name>
    bypass_reason: "<sanitized rationale>"
    ```
-6. Proceed to Phase 1 under the user's explicit responsibility.
+6. Proceed to Phase 5 under the user's explicit responsibility.
 
 ### When Plan-Auditor Fails or Times Out
 
@@ -155,7 +164,15 @@ Plan-auditor failure cases classified as INCONCLUSIVE:
 Retry limit (OPEN QUESTION Q3 resolution): Maximum 3 total plan-auditor invocations per `/moai run`
 call (including retries). After 3 INCONCLUSIVE results, force AskUserQuestion with proceed/abort only.
 
-## Phase 0.6: Environment Assessment (Conditional)
+### Tier S Single-Audit-Pass Default
+
+Where the SPEC frontmatter `tier:` is `S`, the Plan Audit Gate runs exactly ONE audit pass by default — the iterative verdict re-execution loop defaults OFF for Tier S: a PASS verdict is final without a score-threshold re-run. The audit always runs (once) for every tier — Tier S changes only the re-run loop, never whether the audit runs; this section introduces no skip of the audit itself. FAIL and INCONCLUSIVE verdicts still halt and escalate exactly per Steps 4b-4d above. Tier M/L iterative audit behavior (the retry ceilings and re-audit loop above) is unchanged.
+
+### FAIL Defect-List Delta Re-Check (plan-audit)
+
+When plan-auditor returns FAIL, the verdict carries a structured defect-list — finding id, artifact/file + location, severity, and required fix per entry (see the plan-auditor Output Format defect-list contract). The orchestrator routes fixes directly — an orchestrator-direct edit or a single re-delegation to manager-spec — and the confirming re-audit is scoped to the enumerated defect delta rather than a from-scratch full re-audit, within the existing iteration ceilings above. Verdict authority is NOT transferred: binding PASS/FAIL judgment stays with the plan-auditor — the delta scope reduces re-audit cost, and it never substitutes an orchestrator self-assessment for an auditor verdict.
+
+## Phase 2: Environment Assessment (Conditional)
 
 Condition: Only executes when `memory_guard.enabled: true` in quality.yaml.
 If memory_guard is not enabled or not present, skip to Phase 1.
@@ -173,16 +190,16 @@ Steps:
    - Above adaptive_threshold_mb: Set test_execution_strategy to "full" (normal execution)
 4. Pass test_execution_strategy as context to all subsequent phases via agent prompt
 
-Output: test_execution_strategy ("full", "module", "changed") passed to Phase 1+ as binding context.
+Output: test_execution_strategy ("full", "module", "changed") passed to Phase 5+ as binding context.
 
 Progress update: Append to `.moai/specs/SPEC-{ID}/progress.md`:
 ```
-- Phase 0.6 complete: memory_guard={enabled|disabled}, available_mb={N}, strategy={full|module|changed}
+- Phase 2 complete: memory_guard={enabled|disabled}, available_mb={N}, strategy={full|module|changed}
 ```
 
 <!-- @MX:WARN: [AUTO] Future PRs may be tempted to revert to moai-lang-* skill references here. The current rule-path mapping (post-the language-as-rules policy) MUST remain pointing to .claude/rules/moai/languages/<name>.md. Frontmatter `related-skills:` regressions fail TestRelatedSkillsNoLangReference (DEAD_LANG_FRONTMATTER_REFERENCE); body-prose regressions fail TestSkillBodyNoLangReference (DEAD_LANG_SKILL_REFERENCE). -->
 <!-- @MX:REASON: High-traffic section — language detection mapping is frequently referenced by agent authors who may inadvertently reintroduce moai-lang-* skill IDs. -->
-## Phase 0.9: JIT Language Skill Detection
+## Phase 3: JIT Language Skill Detection
 
 Purpose: Detect the project's primary language and prepare the appropriate language skill reference for agent spawn prompts. Since language skills are not statically bound to agents, the orchestrator must inject them at spawn time.
 
@@ -211,30 +228,39 @@ Output: detected_language_skills list passed to all subsequent agent spawn promp
 
 This phase always executes and does NOT require user approval.
 
-## Phase 0.95: Scale-Based Execution Mode Selection
+## Phase 4: Scale-Based Execution Mode Selection
 
-Purpose: Automatically select the optimal execution mode based on task scope, preventing over-engineering for simple tasks and under-resourcing for complex ones.
+Purpose: Automatically select the optimal execution mode based on task scope, preventing over-engineering for simple tasks and under-resourcing for complex ones. The scale labels below are ENVELOPES of the Phase 4 catalog modes (`.claude/rules/moai/workflow/orchestration-mode-selection.md` §A); the label→catalog correspondence is documented in that rule's §G.1 crosswalk (correspondence, not merge).
 
 Mode Selection Rules:
 
-| Request Pattern | Detection Criteria | Execution Mode | Agents |
+| Request Pattern | Detection Criteria | Execution Mode (catalog correspondence) | Agents |
 |----------------|-------------------|---------------|--------|
-| Bug fix / error fix | SPEC scope ≤ 3 files, single domain | **Fix Mode** | manager-develop + orchestrator verification batch (lint + test + coverage) |
-| Single endpoint / function | SPEC scope ≤ 5 files, single domain | **Focused Mode** | manager-develop (domain context injected per archived-agent-rejection.md §C) |
-| Feature across 1 domain | SPEC scope 5-10 files, single domain | **Standard Mode** | manager-spec (planning) + manager-develop + sync-auditor |
-| Multi-domain feature | SPEC scope ≥ 10 files OR ≥ 3 domains | **Full Pipeline** | manager-spec → manager-develop (per-spawn `Agent(general-purpose)` domain specialists) → sync-auditor → manager-docs |
-| Large cross-cutting change | complexity score ≥ 7 AND --team flag | **Team Mode** | 3-4 parallel teammates |
+| Bug fix / error fix | SPEC scope ≤ 3 files, single domain | **Fix Mode** (serial envelope) | manager-develop + orchestrator verification batch (lint + test + coverage) |
+| Single endpoint / function | SPEC scope ≤ 5 files, single domain | **Focused Mode** (serial envelope) | manager-develop (domain context injected per archived-agent-rejection.md §C) |
+| Feature across 1 domain | SPEC scope 5-10 files, single domain | **Standard Mode** (serial envelope) | manager-spec (planning) + manager-develop + sync-auditor |
+| Multi-domain feature | SPEC scope ≥ 10 files OR ≥ 3 domains | **Full Pipeline** (serial full envelope) | manager-spec → manager-develop (per-spawn `Agent(general-purpose)` domain specialists) → sync-auditor → manager-docs |
+| Large cross-cutting change | complexity score at/above the auto-select threshold (`orchestration-mode-selection.md` §B.1) | **Parallel research → Sub-agent implement** (fanout + serial) | 3-5 concurrent read-only `Agent()` for research; sequential manager-develop for implementation. (`agent-team` retired.) |
+
+Large-change note: agent-team is retired with the Agent Teams static layer. Multi-domain research fans out via fanout (3-5 concurrent read-only `Agent()` in one turn); coding-heavy implementation stays serial (sequential sub-agent) per the Anthropic coding-task parallelism caveat.
 
 Detection Steps:
 1. Count files referenced in SPEC requirements and plan
 2. Identify domains touched (backend, frontend, database, infra, docs)
 3. Assess complexity from SPEC priority and acceptance criteria count
 4. Select mode based on the table above
-5. Log selected mode: "Scale-based mode: {mode} (files: {N}, domains: {N})"
+4b. Map each domain touched (step 2) to its skill set from the delegation map (`.moai/config/sections/delegation.yaml` domain_skills), per skill-routing.md §1: backend → moai-ref-api-patterns; frontend → moai-ref-react-patterns; database → moai-domain-database; security → moai-ref-owasp-checklist; tests → moai-ref-testing-pyramid. At each manager-develop spawn, inject the cycle_type skill (moai-workflow-tdd | moai-workflow-ddd) plus 0-3 matched domain `moai-ref-*` skills as `At start, invoke Skill("<name>") for <reason>` lines.
+5. Write the `progress.md` § Phase 4 Mode Selection log entry per `orchestration-mode-selection.md` §D HARD logging contract BEFORE spawning the first run-phase `Agent()` call — the Input parameters block (tier, scope, domain count, file language mix, concurrency benefit), the mode evaluation table across all 4 catalog modes, a single-line Decision (e.g. "Scale-based mode: {mode} (files: {N}, domains: {N})"), a short Justification paragraph, and — when the selection resolves to sweep — the Implementation Kickoff Approval-passed + preferences-collected confirmation
 
-This phase auto-selects and does NOT require user approval. The user can override with --team or --solo flags.
+This phase auto-selects and does NOT require user approval. The user can override with the --solo flag (a forced --team selects the experimental Agent Teams layer per `orchestration-mode-selection.md` §C.1).
 
-## Phase 1: Analysis and Planning
+### Operational Entries (fanout / sweep)
+
+**fanout — research fan-out**: while pre-implementation work is research-heavy and multi-domain, the orchestrator spawns 3-5 concurrent read-only `Agent()` calls in a single turn for analysis fan-out (codebase exploration, external research, quality baseline). Implementation itself remains serial (sequential sub-agent) per the Anthropic coding-task parallelism caveat.
+
+**sweep — launch procedure**: candidate ONLY when the `orchestration-mode-selection.md` §C.3 capability gate holds — Implementation Kickoff Approval passed + all preferences collected + scope ≥ ~30 files with one uniform mechanical transform and no inter-file dependency + runtime ≥ v2.1.154 with workflows not disabled. Launch procedure: (1) verify each §C.3 precondition; (2) record the sweep selection + gate confirmations in `progress.md` §F Phase 4 Mode Selection BEFORE launch; (3) launch the workflow fan-out from the orchestrator (scaling, not nesting); (4) workflow agents return blocker reports and never prompt the user — every needed decision is drained at Implementation Kickoff Approval first.
+
+## Phase 5: Analysis and Planning
 
 Agent: manager-spec subagent (planning IS strategy per `.claude/rules/moai/workflow/archived-agent-rejection.md` §C row 1)
 
@@ -251,7 +277,7 @@ Tasks for manager-spec:
 
 Output: Execution plan containing plan_summary, requirements list, success_criteria, and effort_estimate.
 
-Implementation guard: [HARD] During Phase 1 (Analysis and Planning), the manager-spec subagent MUST NOT write any implementation code. The explicit instruction "DO NOT implement any code — focus exclusively on analysis and planning" MUST be included in the agent prompt. This separation of thinking and execution prevents premature implementation and ensures the plan is reviewed before any code is written.
+Implementation guard: [HARD] During Phase 5 (Analysis and Planning), the manager-spec subagent MUST NOT write any implementation code. The explicit instruction "DO NOT implement any code — focus exclusively on analysis and planning" MUST be included in the agent prompt. This separation of thinking and execution prevents premature implementation and ensures the plan is reviewed before any code is written.
 
 ## Decision Point 1: Plan Approval
 
@@ -277,13 +303,13 @@ Before presenting options, verify the plan against these criteria:
 
 Options:
 
-- Proceed with plan (continue to Phase 1.5)
-- Modify plan (collect feedback, re-run Phase 1)
+- Proceed with plan (continue to Phase 6)
+- Modify plan (collect feedback, re-run Phase 5)
 - Postpone (exit, continue later)
 
 If user does not select "Proceed": Exit execution.
 
-## Phase 1.5: Task Decomposition
+## Phase 6: Task Decomposition
 
 Agent: manager-spec subagent (continuation)
 
@@ -324,9 +350,9 @@ SPEC: {SPEC-ID}
 ```
 
 This file is git-tracked. Update task status as implementation progresses.
-The planned_files column is used by the Drift Guard (Phase 2A/2B) to detect scope drift.
+The planned_files column is used by the Drift Guard (Phase 11/2B) to detect scope drift.
 
-## Phase 1.6: Acceptance Criteria Initialization (Failing Checklist)
+## Phase 7: Acceptance Criteria Initialization (Failing Checklist)
 
 Purpose: Convert all SPEC acceptance criteria into explicit pending TaskList entries. This creates a visible "failing checklist" — all items start as pending and are marked completed (passing) as implementation progresses, following the Harness Engineering pattern.
 
@@ -342,17 +368,17 @@ Output: TaskList populated with all acceptance criteria as pending items.
 
 Progress update: Append to `.moai/specs/SPEC-{ID}/progress.md`:
 ```
-- Phase 1.6 complete: {N} acceptance criteria registered as pending tasks
+- Phase 7 complete: {N} acceptance criteria registered as pending tasks
 ```
 
-## Phase 1.7: File Structure Scaffolding
+## Phase 8: File Structure Scaffolding
 
 Purpose: Create empty file stubs for all planned new files before implementation begins. This prevents entropy by establishing structure before coding, following the Harness Engineering "Blueprint" pattern.
 
 Condition: Execute only for planned new files (files that do not yet exist in the codebase). Skip if all planned files already exist (modification-only SPEC).
 
 Action:
-- Identify all planned new files from Phase 1.5 task decomposition
+- Identify all planned new files from Phase 6 task decomposition
 - For each planned new file that does not yet exist:
   - Create empty stub with minimal required structure matching the project's language conventions (e.g., package declaration for Go, module header for Python, empty class for TypeScript)
   - Do NOT add any implementation logic — stubs only
@@ -362,14 +388,14 @@ Output: List of stub files created, LSP baseline diagnostics captured.
 
 Progress update: Append to `.moai/specs/SPEC-{ID}/progress.md`:
 ```
-- Phase 1.7 complete: {N} stub files created, LSP baseline captured
+- Phase 8 complete: {N} stub files created, LSP baseline captured
 ```
 
-## Phase 1.8: Pre-Implementation MX Context Scan
+## Phase 9: Pre-Implementation MX Context Scan
 
 Purpose: Scan files that will be modified during implementation to build an MX context map for implementation agents.
 
-**Scan Target:** All existing files listed in the task decomposition (from Phase 1.5).
+**Scan Target:** All existing files listed in the task decomposition (from Phase 6).
 
 **MX Context Extraction:**
 - @MX:ANCHOR: Identify invariant contracts. Pass to implementation agents as "do not break" constraints with fan_in counts.
@@ -378,16 +404,18 @@ Purpose: Scan files that will be modified during implementation to build an MX c
 - @MX:TODO: Match against SPEC requirements. If a TODO aligns with a task, the implementation resolves it.
 - @MX:LEGACY: Identify legacy code without SPEC. Flag for careful handling during modifications.
 
-**Output:** MX context map included in Phase 2 agent prompts. The map is structured per-file:
+**Output:** MX context map included in Phase 11 agent prompts. The map is structured per-file:
 - file_path: list of tags with type, line, description, and constraints
 
 **Skip Condition:** If target files do not exist (greenfield implementation), skip this phase.
+
+**Sharding (`FO-RUN-1`, read-only):** **Where** the scan target spans many files across several packages, the orchestrator shall shard the scan — one read-only `Agent()` per package shard in a single turn, 3-5 concurrent per the fanout ceiling (`.claude/rules/moai/workflow/orchestration-mode-selection.md` §C.2). Each shard returns its slice of the context map as text and writes no file; the orchestrator merges the slices into the single map above. A shard that cannot read a target records the gap and returns a structured blocker report (`.claude/rules/moai/core/agent-common-protocol.md` § Blocker Report Format) rather than prompting the user. The orchestrator launches the shards itself — scaling, not subagent nesting. **Where** the target set is small or sharding is skipped, the scan runs as one pass with identical output.
 
 See .claude/rules/moai/workflow/mx-tag-protocol.md for tag type definitions.
 
 ## Development Mode Routing
 
-Before Phase 2, determine the development methodology by reading `.moai/config/sections/quality.yaml`:
+Before Phase 11, determine the development methodology by reading `.moai/config/sections/quality.yaml`:
 
 **If development_mode is "ddd":**
 - Route all tasks to manager-develop subagent
@@ -397,13 +425,13 @@ Before Phase 2, determine the development methodology by reading `.moai/config/s
 - Route all tasks to manager-develop subagent
 - Use RED-GREEN-REFACTOR cycle (see @spec-workflow.md for details)
 
-## Phase 2.0: Sprint Contract Negotiation
+## Phase 10: Milestone Contract Negotiation
 
 **Condition**: Execute only when harness level = thorough.
 **Skip**: When harness level = minimal or standard.
 
 Steps:
-1. Load implementation plan from Phase 1.5 task decomposition
+1. Load implementation plan from Phase 6 task decomposition
 2. Invoke sync-auditor to review the plan:
    - Identify missing edge cases in proposed test coverage
    - Flag security concerns in the implementation approach
@@ -417,17 +445,16 @@ Steps:
 
 Mode-specific deployment:
 - Sub-agent mode: Agent(subagent_type="sync-auditor")
-- Team mode: SendMessage to reviewer teammate
 - CG mode: Leader performs contract negotiation inline
 
 **Output**: `.moai/specs/SPEC-{ID}/contract.md`
 
 ## Delta Marker Detection (Brownfield Pre-Check)
 
-Before routing to Phase 2A or 2B, scan the loaded SPEC for `[DELTA]` section markers:
+Before routing to Phase 11 or 2B, scan the loaded SPEC for `[DELTA]` section markers:
 
 1. Check spec.md (or spec-compact.md) for any line matching `[EXISTING]`, `[MODIFY]`, `[NEW]`, or `[REMOVE]`
-2. If NO delta markers found: skip this section, proceed to Phase 2A/2B normally (greenfield path)
+2. If NO delta markers found: skip this section, proceed to Phase 11/2B normally (greenfield path)
 3. If delta markers found: activate delta-aware routing as follows
 
 **Delta-aware routing rules (applied within DDD or TDD mode):**

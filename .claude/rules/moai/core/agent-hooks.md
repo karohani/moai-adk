@@ -50,6 +50,7 @@ Actions follow the naming pattern `{agent}-{phase}`:
 | manager-develop | develop-pre-implementation | develop-post-implementation | develop-completion |
 | manager-spec | - | - | spec-completion |
 | manager-docs | - | docs-verification | docs-completion |
+| sync-auditor | - | - | evaluator-completion |
 
 Note: The archived `expert-backend` / `expert-frontend` / `expert-devops` / `manager-quality` rows that previously appeared here were removed during the catalog consolidation. Domain expertise formerly routed through those agents is now delivered via per-spawn `Agent(general-purpose)` per `.claude/rules/moai/workflow/archived-agent-rejection.md` §C; quality-gate enforcement moved to the global Stop hook `sync-phase-quality-gate.sh` (see `.claude/rules/moai/core/agent-common-protocol.md` § Hook Invocation Surface).
 
@@ -61,9 +62,11 @@ Note: Dynamic team teammates (spawned via `Agent(subagent_type: "general-purpose
 Agent hooks are executed via `moai hook agent <action>`:
 
 ```bash
-moai hook agent ddd-pre-transformation
+moai hook agent cycle-pre-transformation
 moai hook agent develop-pre-implementation
 ```
+
+(The `ddd-*` action family was retired; the current action is `cycle-pre-transformation`. The help text in `internal/cli/hook.go` still carries the stale example and is tracked for a follow-up code update.)
 
 stdin JSON structure:
 
