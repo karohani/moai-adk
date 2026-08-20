@@ -33,6 +33,7 @@ type MessagesHandler struct {
 	catalog        *Catalog
 	litellmProxies map[string]*httputil.ReverseProxy // group name -> passthrough proxy
 	bedrock        BedrockInvoker
+	openaiClient   *http.Client // shared HTTP client for openai-compatible / codex backend calls
 }
 
 // NewMessagesHandler constructs a MessagesHandler for reg/catalog. bedrock
@@ -60,6 +61,7 @@ func NewMessagesHandler(reg *Registry, catalog *Catalog, bedrock BedrockInvoker)
 		catalog:        catalog,
 		litellmProxies: proxies,
 		bedrock:        bedrock,
+		openaiClient:   &http.Client{},
 	}, nil
 }
 
@@ -103,7 +105,19 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveLiteLLM(w, r, dep.Group, body)
 	case GroupTypeBedrock:
 		h.serveBedrock(w, r, dep.Model, body, payload.Stream)
+	case GroupTypeOpenAICompatible:
+		if group.BaseURL == "" {
+			http.Error(w, fmt.Sprintf("proxy: openai-compatible group %q has no base_url configured", dep.Group), http.StatusInternalServerError)
+			return
+		}
+		serveOpenAICompatible(w, r, h.openaiClient, group.BaseURL, body, dep.Model, payload.Stream)
+	case GroupTypeCodex:
+		serveCodex(w, r, h.openaiClient, group, body, dep.Model, payload.Stream)
 	default:
+		// GroupTypeCopilot (and any future unimplemented type) lands here —
+		// copilot is explicitly OUT of v1 scope (plan.md M3 item 8,
+		// spec.md §H); the type enum entry exists from M1 for forward
+		// compatibility, but no backend adapter is implemented in v1.
 		http.Error(w, fmt.Sprintf("proxy: group type %q is not yet wired into the daemon /v1/messages surface", group.Type), http.StatusNotImplemented)
 	}
 }
