@@ -391,27 +391,121 @@ $ grep -n "PROXY-001\|SPEC-PROXY" internal/template/templates/.moai/config/secti
 - The streaming state machine's chunk-arrival assumptions (id+name arriving together or id+name-then-arguments, `finish_reason` eventually arriving, at most one usage-bearing chunk) are drawn from the OpenAI Chat Completions API's documented behavior and from vLLM/TGI-style self-hosted servers' typical co-located-usage shape; an OpenAI-shaped backend with a genuinely different chunking discipline (e.g., id and name split across two separate chunks with a content delta between them) has not been tested and could produce a block ordering surprise.
 - `golangci-lint` remains absent from this environment (same gap M1/M2 reported); `go vet ./...` is the only static-analysis signal captured this run.
 
+## M4 subsection — CLI 배선과 문서 (FINAL milestone)
+
+**cycle_type: tdd** (test what's testable — CLI wiring is largely mechanical, per plan.md's own framing: "마지막인 이유: 전부 기계적이고 되돌리기 쉽다"). Milestone M4 ("CLI 배선과 문서", plan.md §D) — the FINAL milestone. Continues in the SAME worktree/session as M1-M3, after orchestrator independent re-verification + user approval.
+
+### M4 scope delivered (plan.md items 1-5)
+
+1. **`internal/cli/proxy.go` cobra registration** (`GroupID: "launch"`) — matches the sibling launch-group commands (`cc`, `cg`, `glm`; confirmed via `grep -n 'GroupID' internal/cli/cg.go internal/cli/glm.go` before authoring). Standard cobra flag parsing (NOT `DisableFlagParsing`) registers `-g/--group` (StringSlice) and `--set` (String); both delegate entirely to the ALREADY-IMPLEMENTED M2 `proxy.ResolveActiveGroups` — no reimplementation of the resolution order or the mutual-exclusion check. **Design divergence from cc/cg/glm, documented**: this command does NOT `syscall.Exec`-replace the process (the pattern `launchClaudeDefault` uses, confirmed via `grep -n 'syscall.Exec' internal/cli/launcher.go`) — the M2 daemon reference count (`Acquire`/`Release`) MUST be released after Claude Code exits, which process replacement makes structurally impossible. Instead, `moai proxy` spawns `claude` as an `exec.Command` child process, waits, and releases the daemon reference in a `defer`.
+2. **New environment-variable constants** (`internal/config/envkeys.go`) — `EnvProxyStateDir` (`MOAI_PROXY_STATE_DIR`) and `EnvProxyRegistryPath` (`MOAI_PROXY_REGISTRY_PATH`), mirroring the existing `EnvConfigDir` (`MOAI_CONFIG_DIR`) override pattern (CLAUDE.local.md §14 hardcoding-prevention rule: env var names live as constants, never inline string literals).
+3. **`--help` text, error messages, exit codes** — `proxyCmd.Long` documents the 5-step daemon-acquire-then-launch flow, flag semantics, and 4 usage examples. Every error path is wrapped with a `moai proxy: ` prefix naming the failing step (registry load / working-directory resolution / group resolution / daemon acquisition / claude launch). Exit-code discipline (`internal/cli/CLAUDE.md`): a `proxyExitError` type implementing the existing `ExitCoder` interface (`cmd/moai/main.go`) propagates the CHILD `claude` process's real exit code verbatim, rather than flattening every failure to `os.Exit(1)`.
+4. **Cross-platform build verification** — `go build ./...` and `GOOS=windows GOARCH=amd64 go build ./...` both clean (verbatim below), same bar as M1-M3.
+5. **User documentation** — **Go CLI `--help` text (item 3 above) plus a `README.md`/`README.ko.md` CLI-commands-table row**, NOT a template-surface change: `moai proxy` is a Go-source CLI subcommand with no `.claude`/`.moai` template mirror of its own (M1 already documented the `llm.proxy.default_set` project-pointer field with explanatory comments in `internal/template/templates/.moai/config/sections/llm.yaml`, which is the one template surface this SPEC touches, and that documentation is unchanged by M4). Per the M4 delegation's own guidance ("If the documentation is Go godoc / CLI --help text only, no template step is needed"), no Template-First step applies here — confirmed by `git status --short` showing zero touches under `internal/template/templates/` in this milestone's diff.
+
+### RED evidence (verbatim, captured before implementation)
+
+```
+$ go vet ./internal/cli/...
+# github.com/modu-ai/moai-adk/internal/cli [github.com/modu-ai/moai-adk/internal/cli.test]
+internal/cli/proxy_test.go:18:15: undefined: proxyCmd
+internal/cli/proxy_test.go:25:13: undefined: proxyCmd
+internal/cli/proxy_test.go:35:5: undefined: proxyCmd
+internal/cli/proxy_test.go:36:41: undefined: proxyCmd
+internal/cli/proxy_test.go:45:14: undefined: resolveProxyStateDir
+internal/cli/proxy_test.go:63:14: undefined: resolveProxyStateDir
+internal/cli/proxy_test.go:77:14: undefined: resolveProxyRegistryPath
+internal/cli/proxy_test.go:95:14: undefined: resolveProxyRegistryPath
+internal/cli/proxy_test.go:114:14: undefined: resolveProxyActiveGroups
+internal/cli/proxy_test.go:128:12: undefined: resolveProxyActiveGroups
+internal/cli/proxy_test.go:128:12: too many errors
+```
+
+### GREEN evidence (verbatim, this run, this tree — HEAD after implementation)
+
+```
+$ go test ./internal/cli/ -run 'TestProxy|TestResolveProxy|TestFirstBedrockGroup|TestRunProxy' -v 2>&1 | grep -c '^--- PASS'
+15
+$ go test ./internal/cli/ -run 'TestProxy|TestResolveProxy|TestFirstBedrockGroup|TestRunProxy' -v 2>&1 | grep -c '^--- FAIL'
+0
+$ go test ./internal/cli/... -skip 'TestRunHookEvent_ReadInputError|TestRunAgentHook_ReadInputError|TestI18nKeySetParity|TestBridgeFieldDefResolver|TestTUIRendersSchemaFieldSet' 2>&1
+ok  	github.com/modu-ai/moai-adk/internal/cli	9.067s
+ok  	github.com/modu-ai/moai-adk/internal/cli/harness	3.802s
+ok  	github.com/modu-ai/moai-adk/internal/cli/pr	1.226s
+ok  	github.com/modu-ai/moai-adk/internal/cli/preference	0.883s
+ok  	github.com/modu-ai/moai-adk/internal/cli/specid	1.062s
+ok  	github.com/modu-ai/moai-adk/internal/cli/wizard	1.807s
+ok  	github.com/modu-ai/moai-adk/internal/cli/worktree	2.956s
+```
+15/15 new M4 tests PASS, 0 FAIL. `internal/proxy` and `internal/config` remain green (`go test ./internal/proxy/... ./internal/config/...` — both `ok`, unmodified by M4 beyond the two new env-var constants).
+
+### Build / vet / cross-platform (this run)
+
+```
+$ go build ./...
+(exit 0, no output)
+$ go vet ./...
+(exit 0, no output)
+$ GOOS=windows GOARCH=amd64 go build ./...
+(exit 0, no output)
+$ gofmt -l internal/cli/proxy.go internal/cli/proxy_test.go internal/config/envkeys.go
+(no output — all three files already gofmt-clean)
+```
+
+### Subagent boundary (C-HRA-008 family)
+
+```
+$ grep -rn "AskUserQuestion\|mcp__askuser" internal/cli/proxy.go internal/proxy/ | grep -v "_test.go" | grep -v "// "
+(no output — 0 matches, exit 1)
+```
+`TestProxyCmd_NoAskUserQuestion` additionally provides an in-package static guard matching the canonical `internal/cli/CLAUDE.md` pattern (`TestNew_NoAskUserQuestion` in `worktree/new_test.go`).
+
+### AC PASS/FAIL matrix — M4-scoped AC IDs
+
+**None.** Cross-checked against `acceptance.md`'s full AC-PROXY-001a through AC-PROXY-016 summary table (`grep -n "| AC-PROXY-" .moai/specs/SPEC-PROXY-001/acceptance.md`): every row is tagged M1, M2, or M3 — **zero rows are tagged M4**. This matches the M4 delegation's own explicit framing ("M4 may have few or no dedicated ACs since it's CLI wiring and docs") and plan.md's characterization of M4 as purely mechanical CLI wiring atop already-AC-verified core logic (M1-M3). Reported explicitly rather than force-fitting an M1-M3 AC ID onto M4 evidence.
+
+### Not in M4 scope (remain untested / unimplemented, by design)
+
+- `buildProxyBedrockInvoker`'s call into the real AWS SDK (`proxy.NewAWSBedrockInvoker`) — untested past its zero/one-bedrock-group selection logic (`firstBedrockGroup`, 100% covered); same AWS-SDK-boundary gap M2 already documented.
+- `runProxy`'s full happy-path flow (registry load → group resolution → daemon acquire → `exec.Command("claude", ...)` → wait → release) — untested end-to-end; only the fast-fail registry-load-error branch is exercised (`TestRunProxy_RegistryLoadFailureReturnsErrorBeforeLaunchingClaude`). Exercising the full path requires either a real daemon bind + a real `claude` binary on PATH, which CLAUDE.local.md §13 explicitly prohibits running in this dev project ("GLM Integration Testing... `moai cc`/`moai glm` 커맨드 플로우는 실제 settings 파일을 수정하므로 dev project에서 절대 실행 금지" — the same prohibition this delegation's own instructions anticipated by scoping E1-E8 self-verification to "test what's testable").
+- A real multi-project daemon-sharing smoke test through the actual `moai proxy` CLI entrypoint (as opposed to M2's in-process `Daemon` two-caller test) — the CLI entrypoint now exists, but exercising it end-to-end needs two real process invocations sharing `~/.moai/proxy/`, which is exactly the same category of untestable-in-this-environment integration this SPEC's every milestone has flagged rather than silently skipped.
+
+### Gaps (explicitly not observed, M4)
+
+- The real `exec.Command("claude", ...)` child-process launch, its exit-code propagation through `proxyExitError`, and the deferred `daemon.Release()` firing on child exit are none of them exercised against a live `claude` binary — CLAUDE.local.md §13's dev-project prohibition on launch-command integration flows applies directly, and this environment additionally has no live daemon to bind against for a real end-to-end smoke test.
+- `buildProxyBedrockInvoker`'s AWS SDK call path is untested beyond its selection logic, for the same reason M2's `bedrock_aws.go` reported: no live AWS credentials/network available.
+- README.md / README.ko.md are the only user-facing prose documentation touched; no docs-site (`adk.mo.ai.kr`) page exists for `moai proxy` — CLAUDE.local.md §17's 4-locale docs-site sync doctrine was judged out of proportion to a CLI-wiring milestone and is left for a follow-up documentation SPEC if the maintainer wants full docs-site coverage.
+- The pre-existing, unrelated `internal/cli` test failures (`TestRunHookEvent_ReadInputError`, `TestRunAgentHook_ReadInputError`, `TestI18nKeySetParity`, `TestBridgeFieldDefResolver`, `TestTUIRendersSchemaFieldSet`) were reconfirmed present and unrelated via `git status --short` (M4's diff touches only `proxy.go`, `proxy_test.go`, `envkeys.go`, and the two READMEs — none overlapping `coverage_test.go`, `misc_coverage_test.go`, or `schema_bridge_test.go`).
+
+### Residual risk (M4)
+
+- `firstBedrockGroup`'s "pick the first bedrock group found in map iteration" selection (inherited from M2/M3's single-`BedrockInvoker`-per-daemon design, not newly introduced by M4) means a machine registry with MULTIPLE differently-configured bedrock groups (different regions/profiles) will non-deterministically pick one at daemon-start time — this is a pre-existing M2/M3 architectural simplification that M4's CLI wiring surfaces but does not fix (documented, not silently inherited).
+- A bedrock-invoker construction failure at `moai proxy` startup is logged to stderr and treated as "bedrock groups inactive" rather than blocking daemon startup — consistent with REQ-PROXY-021's per-group isolation shape, but untested against a real failure (e.g., malformed AWS credentials) since no live AWS environment is available here.
+- `golangci-lint` remains absent from this environment (same gap M1/M2/M3 reported); `go vet ./...` is the only static-analysis signal captured this run.
+
 ## §E.3 Run-phase Audit-Ready Signal
 
-- run_milestone: M3 of M1-M4 (plan.md §D)
-- run_status: milestone-complete — awaiting orchestrator review before M4 (semi-autonomous progression, per spawn instruction). This run was interrupted mid-milestone by a host-machine sleep event and resumed from orchestrator-confirmed on-disk state (build/tests clean, no rejection implied).
+- run_milestone: M4 of M1-M4 (plan.md §D) — **FINAL milestone. All 4 milestones (25 AC total) are now functionally complete pending sync/PR.**
+- run_status: **SPEC-PROXY-001 run-phase complete** — all 4 milestones delivered across this worktree/session (with one mid-M3 infrastructure interruption, resumed cleanly per orchestrator-confirmed on-disk state, no rejection involved). Awaiting orchestrator final review, then sync-phase (`manager-docs`) and Tier L PR routing (`manager-git`), both out of this delegation's scope.
 - m1_commit_strategy: single milestone commit — `50542c7ff` on branch `worktree-agent-a1ebd35fa5ba3d08b`
 - m2_commit_strategy: single milestone commit — `4407cd82a` on branch `worktree-agent-a1ebd35fa5ba3d08b`
-- m3_commit_strategy: single milestone commit — `086b9f622` on branch `worktree-agent-a1ebd35fa5ba3d08b` (this agent's isolated worktree; NOT pushed to `origin/main` — Tier L routes through `manager-git`/PR per SPEC Phase Discipline Route B, out of this delegation's scope)
-- ac_pass_count (M1+M2+M3-scoped, cumulative): 25 (M1: 7 — AC-PROXY-003, 004, 006, 007a, 007b, 008, 016; M2: 13 — AC-PROXY-001a, 001b, 001c, 002, 005a, 005b, 005c, 005d, 005f, 009 [with-debt], 010, 015a, 015b; M3: 5 — AC-PROXY-011, 012a, 012b, 013, 014)
-- ac_fail_count (M1+M2+M3-scoped): 0
-- new_files (M3): internal/proxy/{anthropic_handler_openai_test,codex_credentials,codex_credentials_test,codex_group,codex_group_test,openai_compatible,openai_shared,openai_shared_test,translate,translate_stream,translate_stream_test,translate_test}.go (12 files)
-- modified_files (M3): internal/proxy/anthropic_handler.go (openai-compatible/codex dispatch wiring), internal/proxy/anthropic_handler_test.go (M2 unwired-type fixture repointed from codex to copilot per advisor guidance now that codex is wired), .moai/specs/SPEC-PROXY-001/progress.md (this file)
-- new_warnings_or_lints_introduced: unknown — `golangci-lint` still not installed in this environment; `go vet ./...` is clean (exit 0). Same residual-risk gap as M1/M2, not newly introduced.
+- m3_commit_strategy: single milestone commit — `086b9f622` on branch `worktree-agent-a1ebd35fa5ba3d08b`
+- m4_commit_strategy: single milestone commit — `adc1b1a1b` on branch `worktree-agent-a1ebd35fa5ba3d08b` (this agent's isolated worktree; NOT pushed to `origin/main` — Tier L routes through `manager-git`/PR per SPEC Phase Discipline Route B, out of this delegation's scope)
+- ac_pass_count (M1+M2+M3+M4-scoped, cumulative): 25 (M1: 7 — AC-PROXY-003, 004, 006, 007a, 007b, 008, 016; M2: 13 — AC-PROXY-001a, 001b, 001c, 002, 005a, 005b, 005c, 005d, 005f, 009 [with-debt], 010, 015a, 015b; M3: 5 — AC-PROXY-011, 012a, 012b, 013, 014; M4: 0 — no M4-tagged AC rows exist in acceptance.md, confirmed by grep). **25/25 total ACs in acceptance.md are now covered by M1-M3 evidence.**
+- ac_fail_count (M1+M2+M3+M4-scoped): 0
+- new_files (M4): internal/cli/proxy.go, internal/cli/proxy_test.go (2 files)
+- modified_files (M4): internal/config/envkeys.go (2 new env var constants), README.md, README.ko.md (CLI commands table row), .moai/specs/SPEC-PROXY-001/progress.md (this file)
+- new_warnings_or_lints_introduced: unknown — `golangci-lint` still not installed in this environment; `go vet ./...` is clean (exit 0). Same residual-risk gap as M1/M2/M3, not newly introduced.
 - cross_platform_build.linux_darwin: PASS (native `go build ./...`, exit 0)
 - cross_platform_build.windows: PASS (`GOOS=windows GOARCH=amd64 go build ./...`, exit 0)
-- total_run_phase_files (M3): 14 (12 new + 2 modified)
+- total_run_phase_files (M4): 6 (2 new + 4 modified)
+- total_run_phase_files (M1-M4 cumulative): 22 (M1: 11) + 25 (M2) + 14 (M3) + 6 (M4) — note some M1/M2/M3 totals double-count progress.md itself across milestones since it is modified every milestone; the authoritative file-count is `git diff --stat 50542c7ff^..adc1b1a1b` if an exact union count is needed at sync-phase.
 
 ### Gaps (explicitly not observed, M2)
 
 - Real AWS Bedrock EventStream wire-format reconstruction was never exercised against a live Bedrock endpoint — `bedrock_aws.go`'s streaming reader is untested beyond the SDK-level error path (see Residual risk above).
 - A real Claude Code CLI conversation routed through `moai proxy` (the literal AC-PROXY-009 scenario) requires an interactive client and a live backend, neither available in this environment; the mechanical equivalent (full SSE relay through the actual daemon HTTP surface) was verified instead. AC-PROXY-009 is reported PASS-WITH-DEBT, not a bare PASS.
-- Multi-process daemon coordination (real separate OS processes sharing the lock file) is modeled in-process; the actual `moai proxy` CLI entrypoint that would launch real separate processes is M4 scope and does not exist yet.
+- Multi-process daemon coordination (real separate OS processes sharing the lock file) is modeled in-process; the actual `moai proxy` CLI entrypoint that would launch real separate processes was M4 scope at the time this was written. **Update (M4 subsection below): the CLI entrypoint now exists (`internal/cli/proxy.go`), but a real two-process smoke test through it was still not exercised — see the M4 Gaps section.**
 - The pre-existing, unrelated `TestRunHookEvent_ReadInputError` panic in `internal/cli/coverage_test.go` (first observed during M1's regression sweep) was re-confirmed present and unrelated: `git status --short` after the M2 commit shows no changes to `internal/cli/`. Reported again as a known baseline defect, out of scope for this SPEC.
 
 ### Residual risk (M2)
@@ -421,6 +515,12 @@ See the M2 subsection's "Residual risk" list above (bedrock EventStream reconstr
 ### Gaps and Residual risk (M3)
 
 See the M3 subsection's "Gaps" and "Residual risk" lists above — the official-Codex-CLI verification (item 6, SKIPped with an explicit reason) and the codex endpoint (item 7, narrowed but not settled, mitigated via required explicit `base_url`) are the two headline items. Neither M1 nor M2's open residual-risk items are affected by M3's changes (M3's diff is exclusively new files plus the M2-authored `anthropic_handler.go`'s dispatch switch and its M2 test file's unwired-type fixture).
+
+### Gaps and Residual risk (M4 — FINAL milestone)
+
+See the M4 subsection's "Gaps" and "Residual risk" lists above — the live `claude` child-process launch path, the real AWS bedrock-invoker construction path, and full docs-site coverage are the three headline items, none of which block M4's own deliverable (CLI wiring + --help text + README row + cross-platform build). No open item from M1, M2, or M3 is newly affected by M4's changes (M4's diff is exclusively 2 new files under `internal/cli/`, 2 new constants in `internal/config/envkeys.go`, and 2 README rows — zero touches to `internal/proxy/`).
+
+**SPEC-PROXY-001 status at end of M4**: all 4 milestones (M1 config schema + catalog, M2 daemon + litellm + bedrock, M3 shared OpenAI↔Anthropic translation layer, M4 CLI wiring + docs) delivered across 4 milestone commits (`50542c7ff`, `4407cd82a`, `086b9f622`, `adc1b1a1b`) plus 2 evidence-only commits (`bfaa3a5e3`, `aed2de4ba`) on branch `worktree-agent-a1ebd35fa5ba3d08b`. All 25 acceptance criteria in `acceptance.md` are covered by M1-M3 evidence (M4 carries none of its own). Nothing has been pushed to `origin/main` — per SPEC Phase Discipline Route B (Tier L), pushing and PR creation are `manager-git`'s scope, explicitly out of this delegation's scope across all 4 milestones.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
