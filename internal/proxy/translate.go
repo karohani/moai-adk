@@ -26,15 +26,6 @@ var finishReasonToStopReason = map[string]string{
 	"tool_calls": "tool_use",
 }
 
-// stopReasonToFinishReason is the non-streaming response mapping's inverse,
-// used by the streaming state machine (translate_stream.go) to decide the
-// same values from the request-translation side's vocabulary.
-var stopReasonToFinishReason = map[string]string{
-	"end_turn":   "stop",
-	"max_tokens": "length",
-	"tool_use":   "tool_calls",
-}
-
 // ToOpenAIChatRequest translates an Anthropic /v1/messages request body
 // into an OpenAI Chat Completions request body.
 //

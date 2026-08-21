@@ -137,7 +137,7 @@ func TestOpenAIStreamTranslator_ToolCallFragmentReassembly(t *testing.T) {
 	)
 	events := sseEvents(t, raw)
 
-	var startEvent, stopEvent int = -1, -1
+	var startEvent, stopEvent = -1, -1
 	var deltas []string
 	for i, e := range events {
 		switch e.Event {

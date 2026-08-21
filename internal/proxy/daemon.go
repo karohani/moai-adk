@@ -243,7 +243,6 @@ func (d *Daemon) withLock(mutate func(DaemonState) (DaemonState, error)) error {
 	var lastErr error
 	for {
 		if err := lock.acquire(lockPath); err == nil {
-			lastErr = nil
 			break
 		} else {
 			lastErr = err
