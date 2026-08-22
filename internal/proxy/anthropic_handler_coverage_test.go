@@ -34,7 +34,7 @@ func TestMessagesHandler_RoutesToBedrockStreaming(t *testing.T) {
 	reg := handlerFixtureRegistry("")
 	cat := NewCatalog(reg, []string{"personal"})
 	fake := &fakeBedrockInvoker{streamResp: "event: message_start\ndata: {}\n\n"}
-	h, err := NewMessagesHandler(reg, cat, fake)
+	h, err := NewMessagesHandler(reg, cat, map[string]BedrockInvoker{"personal": fake})
 	if err != nil {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestMessagesHandler_RoutesToBedrockStreaming(t *testing.T) {
 func TestMessagesHandler_BedrockNonStreamingErrorIsBadGateway(t *testing.T) {
 	reg := handlerFixtureRegistry("")
 	cat := NewCatalog(reg, []string{"personal"})
-	h, err := NewMessagesHandler(reg, cat, erroringBedrockInvoker{})
+	h, err := NewMessagesHandler(reg, cat, map[string]BedrockInvoker{"personal": erroringBedrockInvoker{}})
 	if err != nil {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMessagesHandler_BedrockNonStreamingErrorIsBadGateway(t *testing.T) {
 func TestMessagesHandler_BedrockStreamingErrorIsBadGateway(t *testing.T) {
 	reg := handlerFixtureRegistry("")
 	cat := NewCatalog(reg, []string{"personal"})
-	h, err := NewMessagesHandler(reg, cat, erroringBedrockInvoker{})
+	h, err := NewMessagesHandler(reg, cat, map[string]BedrockInvoker{"personal": erroringBedrockInvoker{}})
 	if err != nil {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}

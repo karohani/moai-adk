@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"net/http"
 )
@@ -42,13 +41,25 @@ func serveOpenAIShapedMessages(
 	model string,
 	stream bool,
 ) {
+	// Validate the destination BEFORE any credential is attached. This leg
+	// carries a live OAuth bearer token (codex), so an unvalidated base_url
+	// — a typo, or a planted registry entry pointing at a metadata endpoint
+	// or an external host — would exfiltrate it on the first request. The
+	// litellm leg already parses and checks its URL; doing it only there
+	// left the validation absent from precisely the path that holds secrets.
+	endpoint, err := backendChatCompletionsURL(baseURL)
+	if err != nil {
+		http.Error(w, "proxy: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	translated, err := ToOpenAIChatRequest(anthropicBody, model)
 	if err != nil {
 		http.Error(w, "proxy: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	backendReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(translated))
+	backendReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(translated))
 	if err != nil {
 		http.Error(w, "proxy: build backend request: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -67,8 +78,7 @@ func serveOpenAIShapedMessages(
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		http.Error(w, fmt.Sprintf("proxy: backend returned %d: %s", resp.StatusCode, body), http.StatusBadGateway)
+		relayBackendError(w, resp.StatusCode, resp.Body)
 		return
 	}
 
@@ -102,7 +112,7 @@ func serveOpenAIShapedMessages(
 		http.Error(w, "proxy: read backend response: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	anthResp, err := FromOpenAIChatResponse(body)
+	anthResp, err := FromOpenAIChatResponse(body, model)
 	if err != nil {
 		http.Error(w, "proxy: "+err.Error(), http.StatusBadGateway)
 		return

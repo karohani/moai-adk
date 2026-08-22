@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"time"
 )
 
 // @MX:ANCHOR: [AUTO] MessagesHandler is the daemon's single HTTP entry
@@ -20,6 +22,19 @@ import (
 // read off an incoming request body to route it: the model identifier
 // (REQ-PROXY-014/015) and whether streaming was requested. Every other
 // field is relayed verbatim without being unmarshaled.
+// maxRequestBodyBytes caps a single /v1/messages request body. Large
+// enough for a full conversation with inline images, small enough that one
+// hostile local caller cannot exhaust the shared daemon's memory.
+const maxRequestBodyBytes = 32 << 20 // 32 MiB
+
+// backendDialTimeout / backendResponseHeaderTimeout bound the phases of a
+// backend call that can hang indefinitely, without bounding the streaming
+// body itself.
+const (
+	backendDialTimeout           = 10 * time.Second
+	backendResponseHeaderTimeout = 120 * time.Second
+)
+
 type anthropicMessagesRequest struct {
 	Model  string `json:"model"`
 	Stream bool   `json:"stream"`
@@ -32,15 +47,22 @@ type MessagesHandler struct {
 	registry       *Registry
 	catalog        *Catalog
 	litellmProxies map[string]*httputil.ReverseProxy // group name -> passthrough proxy
-	bedrock        BedrockInvoker
-	openaiClient   *http.Client // shared HTTP client for openai-compatible / codex backend calls
+	// bedrocks is keyed by GROUP NAME. A single shared invoker (the previous
+	// design) signed every bedrock request with one group's region+profile
+	// regardless of which group the catalog resolved, so a registry with two
+	// bedrock groups billed the wrong account and crossed data-residency
+	// boundaries nondeterministically — the selection came from Go map
+	// iteration order and therefore changed between daemon restarts.
+	bedrocks     map[string]BedrockInvoker
+	openaiClient *http.Client // shared HTTP client for openai-compatible / codex backend calls
 }
 
-// NewMessagesHandler constructs a MessagesHandler for reg/catalog. bedrock
-// may be nil when no bedrock-typed group is active this session; a request
-// resolving to a bedrock group with bedrock == nil returns a 500 naming the
-// misconfiguration rather than a nil-pointer panic.
-func NewMessagesHandler(reg *Registry, catalog *Catalog, bedrock BedrockInvoker) (*MessagesHandler, error) {
+// NewMessagesHandler constructs a MessagesHandler for reg/catalog. bedrocks
+// maps GROUP NAME to that group's invoker and may be nil or partial when no
+// bedrock-typed group is configured; a request resolving to a bedrock group
+// with no entry returns a 500 naming the misconfiguration rather than a
+// nil-pointer panic.
+func NewMessagesHandler(reg *Registry, catalog *Catalog, bedrocks map[string]BedrockInvoker) (*MessagesHandler, error) {
 	proxies := make(map[string]*httputil.ReverseProxy)
 	for name, g := range reg.Groups {
 		if g.Type != GroupTypeLiteLLM {
@@ -60,8 +82,18 @@ func NewMessagesHandler(reg *Registry, catalog *Catalog, bedrock BedrockInvoker)
 		registry:       reg,
 		catalog:        catalog,
 		litellmProxies: proxies,
-		bedrock:        bedrock,
-		openaiClient:   &http.Client{},
+		bedrocks:       bedrocks,
+		openaiClient: &http.Client{
+			// No Client.Timeout: it applies to the WHOLE exchange including
+			// the streaming body, so any value would truncate long
+			// responses. Bound connection setup instead, which is where a
+			// misconfigured or unreachable base_url actually hangs.
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: backendDialTimeout}).DialContext,
+				TLSHandshakeTimeout:   backendDialTimeout,
+				ResponseHeaderTimeout: backendResponseHeaderTimeout,
+			},
+		},
 	}, nil
 }
 
@@ -71,9 +103,13 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	// Bound the buffered body. Every request is fully materialized in memory
+	// before routing, and the daemon is shared by every project on the
+	// machine, so an unbounded ReadAll let one local request consume
+	// arbitrary memory for all of them.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 	if err != nil {
-		http.Error(w, "proxy: read request body: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "proxy: read request body: "+err.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
 	_ = r.Body.Close()
@@ -102,9 +138,9 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch group.Type {
 	case GroupTypeLiteLLM:
-		h.serveLiteLLM(w, r, dep.Group, body)
+		h.serveLiteLLM(w, r, dep.Group, body, dep.Model)
 	case GroupTypeBedrock:
-		h.serveBedrock(w, r, dep.Model, body, payload.Stream)
+		h.serveBedrock(w, r, dep.Group, dep.Model, body, payload.Stream)
 	case GroupTypeOpenAICompatible:
 		if group.BaseURL == "" {
 			http.Error(w, fmt.Sprintf("proxy: openai-compatible group %q has no base_url configured", dep.Group), http.StatusInternalServerError)
@@ -122,27 +158,64 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *MessagesHandler) serveLiteLLM(w http.ResponseWriter, r *http.Request, groupName string, body []byte) {
+func (h *MessagesHandler) serveLiteLLM(w http.ResponseWriter, r *http.Request, groupName string, body []byte, model string) {
 	proxy, ok := h.litellmProxies[groupName]
 	if !ok {
 		http.Error(w, fmt.Sprintf("proxy: litellm group %q has no base_url configured", groupName), http.StatusInternalServerError)
 		return
 	}
-	// Restore the body the ReadAll above consumed so the reverse proxy
-	// relays it verbatim (REQ-PROXY-017: pure passthrough, no translation).
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
+
+	// REQ-PROXY-017's "no translation" governs the request SHAPE — litellm
+	// speaks Anthropic natively, so no field mapping is performed. It cannot
+	// extend to the model identifier: the client-facing value is either an
+	// alias this proxy defined (`opus`) or a `<group>/<model>` reference this
+	// proxy's own naming scheme invented (`llm-a/gpt-4o`). Relaying either
+	// verbatim forwards a name the backend has never heard of, so the one
+	// substitution the catalog exists to make must still be applied.
+	relayBody, err := replaceModelField(body, model)
+	if err != nil {
+		http.Error(w, "proxy: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(relayBody))
+	r.ContentLength = int64(len(relayBody))
 	proxy.ServeHTTP(w, r)
 }
 
-func (h *MessagesHandler) serveBedrock(w http.ResponseWriter, r *http.Request, modelID string, body []byte, stream bool) {
-	if h.bedrock == nil {
-		http.Error(w, "proxy: bedrock group resolved but no BedrockInvoker is configured for this daemon", http.StatusInternalServerError)
+// replaceModelField rewrites ONLY the top-level "model" field of an
+// Anthropic request body, leaving every other field byte-for-byte as the
+// client sent it. Round-tripping through a generic map would reorder keys
+// and normalize numbers; keeping the edit surgical preserves the passthrough
+// guarantee everywhere it actually applies.
+func replaceModelField(body []byte, model string) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse request body: %w", err)
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return nil, fmt.Errorf("encode resolved model: %w", err)
+	}
+	raw["model"] = encoded
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("re-encode request body: %w", err)
+	}
+	return out, nil
+}
+
+func (h *MessagesHandler) serveBedrock(w http.ResponseWriter, r *http.Request, groupName, modelID string, body []byte, stream bool) {
+	// Look the invoker up by the RESOLVED group so the request is signed
+	// with that group's own region and profile.
+	invoker, ok := h.bedrocks[groupName]
+	if !ok || invoker == nil {
+		http.Error(w, fmt.Sprintf("proxy: bedrock group %q resolved but no BedrockInvoker is configured for it in this daemon", groupName), http.StatusInternalServerError)
 		return
 	}
 
 	if stream {
-		rc, err := InvokeModelStreamViaBedrock(r.Context(), h.bedrock, modelID, body)
+		rc, err := InvokeModelStreamViaBedrock(r.Context(), invoker, modelID, body)
 		if err != nil {
 			http.Error(w, "proxy: "+err.Error(), http.StatusBadGateway)
 			return
@@ -169,7 +242,7 @@ func (h *MessagesHandler) serveBedrock(w http.ResponseWriter, r *http.Request, m
 		}
 	}
 
-	resp, err := InvokeModelViaBedrock(r.Context(), h.bedrock, modelID, body)
+	resp, err := InvokeModelViaBedrock(r.Context(), invoker, modelID, body)
 	if err != nil {
 		http.Error(w, "proxy: "+err.Error(), http.StatusBadGateway)
 		return

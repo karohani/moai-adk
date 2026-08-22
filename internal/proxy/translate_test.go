@@ -254,7 +254,7 @@ func TestFromOpenAIChatResponse_TextOnly(t *testing.T) {
 		"choices": [{"index":0,"message":{"role":"assistant","content":"Hello there"},"finish_reason":"stop"}],
 		"usage": {"prompt_tokens": 10, "completion_tokens": 3}
 	}`)
-	out, err := FromOpenAIChatResponse(in)
+	out, err := FromOpenAIChatResponse(in, "m")
 	if err != nil {
 		t.Fatalf("FromOpenAIChatResponse() error = %v", err)
 	}
@@ -293,7 +293,7 @@ func TestFromOpenAIChatResponse_ToolCalls(t *testing.T) {
 		]},"finish_reason":"tool_calls"}],
 		"usage": {"prompt_tokens": 20, "completion_tokens": 8}
 	}`)
-	out, err := FromOpenAIChatResponse(in)
+	out, err := FromOpenAIChatResponse(in, "m")
 	if err != nil {
 		t.Fatalf("FromOpenAIChatResponse() error = %v", err)
 	}
@@ -325,7 +325,7 @@ func TestFromOpenAIChatResponse_MalformedToolCallArgumentsIsError(t *testing.T) 
 			{"id":"call_1","type":"function","function":{"name":"f","arguments":"{not json"}}
 		]},"finish_reason":"tool_calls"}]
 	}`)
-	_, err := FromOpenAIChatResponse(in)
+	_, err := FromOpenAIChatResponse(in, "m")
 	if err == nil {
 		t.Fatal("expected error for malformed tool-call arguments JSON, got nil")
 	}
@@ -344,7 +344,7 @@ func TestFromOpenAIChatResponse_FinishReasonMapping(t *testing.T) {
 	}
 	for _, c := range cases {
 		in := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"x"},"finish_reason":"` + c.openai + `"}]}`)
-		out, err := FromOpenAIChatResponse(in)
+		out, err := FromOpenAIChatResponse(in, "m")
 		if err != nil {
 			t.Fatalf("finish_reason=%q: FromOpenAIChatResponse() error = %v", c.openai, err)
 		}
@@ -359,7 +359,7 @@ func TestFromOpenAIChatResponse_FinishReasonMapping(t *testing.T) {
 // TestFromOpenAIChatResponse_MalformedJSONIsError verifies malformed input
 // is rejected explicitly.
 func TestFromOpenAIChatResponse_MalformedJSONIsError(t *testing.T) {
-	_, err := FromOpenAIChatResponse([]byte(`{not json`))
+	_, err := FromOpenAIChatResponse([]byte(`{not json`), "m")
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}

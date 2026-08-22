@@ -60,6 +60,19 @@ type openAIStreamUsage struct {
 type toolCallBlockState struct {
 	blockIndex int
 	started    bool
+
+	// id/name accumulate across chunks. Requiring both in the SAME chunk
+	// (the pre-fix condition) loses the ENTIRE tool call against any backend
+	// that splits them — no content_block_start, no argument deltas — while
+	// the stream still terminates with stop_reason "tool_use", leaving the
+	// client told a tool was called with no tool to run.
+	id   string
+	name string
+
+	// pendingArgs buffers argument fragments that arrive before id+name are
+	// both known. Without this they were dropped outright, silently
+	// truncating the tool's JSON input.
+	pendingArgs []string
 }
 
 // openAIStreamTranslator is a pure Feed(line)->frames state machine. It
@@ -86,6 +99,7 @@ type openAIStreamTranslator struct {
 	terminating  bool   // finish_reason processed, blocks closed, awaiting final flush
 	terminated   bool   // message_delta+message_stop already emitted (idempotency guard)
 
+	promptTokens     int
 	completionTokens int
 }
 
@@ -143,6 +157,7 @@ func (tr *openAIStreamTranslator) Feed(line []byte) [][]byte {
 
 	if chunk.Usage != nil {
 		tr.completionTokens = chunk.Usage.CompletionTokens
+		tr.promptTokens = chunk.Usage.PromptTokens
 		if tr.terminating && !tr.terminated {
 			frames = append(frames, tr.emitMessageEnd()...)
 		}
@@ -157,6 +172,51 @@ func (tr *openAIStreamTranslator) Feed(line []byte) [][]byte {
 func (tr *openAIStreamTranslator) Close() [][]byte {
 	return tr.finalize()
 }
+
+// CloseTruncated flushes termination frames for a stream that ended WITHOUT
+// the backend ever reporting a finish_reason — a dropped connection, a
+// truncated body, or a scanner failure.
+//
+// Defaulting such a stream to stop_reason "end_turn" (the pre-fix behavior)
+// hands the client a response that is byte-indistinguishable from a natural
+// completion, so a half-written answer is accepted as the whole answer. The
+// Anthropic streaming protocol has no "the upstream died" stop_reason, so
+// the honest signal is an explicit `error` event ahead of the terminal
+// frames: clients that understand it can surface the failure, and clients
+// that ignore unknown events still receive a well-formed stream.
+func (tr *openAIStreamTranslator) CloseTruncated(cause string) [][]byte {
+	if tr.terminated {
+		return nil
+	}
+	// A stream that never started carries no partial content to salvage;
+	// the HTTP layer has not yet committed a 200, so let it report normally.
+	if !tr.started {
+		return nil
+	}
+	if tr.finishReason != "" {
+		// The backend DID report a finish reason; the later read error is
+		// incidental (e.g. the connection closing after [DONE]).
+		return tr.finalize()
+	}
+
+	frames := tr.closeBlocks()
+	frames = append(frames, sseFrame("error", map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    "upstream_truncated",
+			"message": "proxy: backend stream ended before reporting a finish reason: " + cause,
+		},
+	}))
+	tr.finishReason = truncatedFinishReason
+	frames = append(frames, tr.emitMessageEnd()...)
+	return frames
+}
+
+// truncatedFinishReason marks an abnormally-ended stream. It maps to
+// Anthropic's "refusal" member so the emitted stop_reason stays inside the
+// documented enum while still differing from the "end_turn" a natural
+// completion produces.
+const truncatedFinishReason = "__moai_truncated__"
 
 func (tr *openAIStreamTranslator) ensureStarted() [][]byte {
 	if tr.started {
@@ -207,20 +267,45 @@ func (tr *openAIStreamTranslator) applyDelta(delta openAIStreamDelta) [][]byte {
 			tr.toolBlocks[tc.Index] = state
 			tr.toolBlockOrder = append(tr.toolBlockOrder, tc.Index)
 		}
-		if !state.started && tc.ID != "" && tc.Function.Name != "" {
+
+		// Accumulate identity across chunks rather than requiring one chunk
+		// to carry both fields.
+		if tc.ID != "" {
+			state.id = tc.ID
+		}
+		if tc.Function.Name != "" {
+			state.name = tc.Function.Name
+		}
+
+		if !state.started && state.id != "" && state.name != "" {
 			state.started = true
 			frames = append(frames, sseFrame("content_block_start", map[string]interface{}{
 				"type":  "content_block_start",
 				"index": state.blockIndex,
 				"content_block": map[string]interface{}{
 					"type":  "tool_use",
-					"id":    tc.ID,
-					"name":  tc.Function.Name,
+					"id":    state.id,
+					"name":  state.name,
 					"input": map[string]interface{}{},
 				},
 			}))
+			// Flush fragments that arrived before identity was complete, in
+			// arrival order, so the reassembled JSON is not missing its head.
+			for _, buffered := range state.pendingArgs {
+				frames = append(frames, sseFrame("content_block_delta", map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": state.blockIndex,
+					"delta": map[string]interface{}{"type": "input_json_delta", "partial_json": buffered},
+				}))
+			}
+			state.pendingArgs = nil
 		}
-		if state.started && tc.Function.Arguments != "" {
+
+		if tc.Function.Arguments != "" {
+			if !state.started {
+				state.pendingArgs = append(state.pendingArgs, tc.Function.Arguments)
+				continue
+			}
 			frames = append(frames, sseFrame("content_block_delta", map[string]interface{}{
 				"type":  "content_block_delta",
 				"index": state.blockIndex,
@@ -289,19 +374,16 @@ func (tr *openAIStreamTranslator) emitMessageEnd() [][]byte {
 	}
 	tr.terminated = true
 
-	stopReason := finishReasonToStopReason[tr.finishReason]
-	if stopReason == "" && tr.finishReason != "" {
-		stopReason = tr.finishReason
-	}
-	if stopReason == "" {
-		stopReason = "end_turn"
-	}
+	stopReason := coerceStopReason(tr.finishReason)
 
 	return [][]byte{
 		sseFrame("message_delta", map[string]interface{}{
 			"type":  "message_delta",
 			"delta": map[string]interface{}{"stop_reason": stopReason, "stop_sequence": nil},
-			"usage": map[string]interface{}{"output_tokens": tr.completionTokens},
+			"usage": map[string]interface{}{
+				"input_tokens":  tr.promptTokens,
+				"output_tokens": tr.completionTokens,
+			},
 		}),
 		sseFrame("message_stop", map[string]interface{}{"type": "message_stop"}),
 	}
@@ -344,16 +426,38 @@ func TranslateOpenAIStreamToAnthropicSSE(r io.Reader, messageID, model string) i
 				break
 			}
 		}
+		// Check the scan error BEFORE flushing terminal frames. The pre-fix
+		// order emitted a clean message_stop and only then noticed the read
+		// had failed, so a truncated stream reached the client wearing a
+		// successful completion's clothes.
 		if writeErr == nil {
-			for _, frame := range tr.Close() {
-				if _, err := pw.Write(frame); err != nil {
-					writeErr = err
-					break
+			if scanErr := scanner.Err(); scanErr != nil {
+				for _, frame := range tr.CloseTruncated(scanErr.Error()) {
+					if _, err := pw.Write(frame); err != nil {
+						writeErr = err
+						break
+					}
+				}
+				if writeErr == nil {
+					writeErr = scanErr
+				}
+			} else {
+				// Clean EOF. If the backend never reported a finish reason,
+				// the stream still ended early — say so rather than
+				// defaulting to end_turn.
+				var frames [][]byte
+				if tr.started && tr.finishReason == "" && !tr.terminated {
+					frames = tr.CloseTruncated("stream ended without a terminating chunk")
+				} else {
+					frames = tr.Close()
+				}
+				for _, frame := range frames {
+					if _, err := pw.Write(frame); err != nil {
+						writeErr = err
+						break
+					}
 				}
 			}
-		}
-		if writeErr == nil {
-			writeErr = scanner.Err()
 		}
 		_ = pw.CloseWithError(writeErr)
 	}()

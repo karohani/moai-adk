@@ -24,6 +24,28 @@ var finishReasonToStopReason = map[string]string{
 	"stop":       "end_turn",
 	"length":     "max_tokens",
 	"tool_calls": "tool_use",
+	// OpenAI emits content_filter when its moderation layer stops
+	// generation. Anthropic's nearest member is refusal; passing
+	// "content_filter" through verbatim (the pre-fix behavior) put a
+	// non-member of Anthropic's stop_reason enum on the wire, which strict
+	// clients reject.
+	"content_filter": "refusal",
+	"function_call":  "tool_use", // deprecated OpenAI alias for tool_calls
+	// Emitted by the streaming translator when the backend stream ended
+	// without ever reporting a finish reason (see CloseTruncated).
+	truncatedFinishReason: "refusal",
+}
+
+// coerceStopReason maps an OpenAI finish_reason onto a VALID Anthropic
+// stop_reason. An unrecognized value falls back to "end_turn" rather than
+// passing through: emitting a value outside Anthropic's enum breaks
+// schema-validating clients, and there is no safe way to invent a new
+// enum member on their behalf.
+func coerceStopReason(finishReason string) string {
+	if mapped, ok := finishReasonToStopReason[finishReason]; ok {
+		return mapped
+	}
+	return "end_turn"
 }
 
 // ToOpenAIChatRequest translates an Anthropic /v1/messages request body
@@ -115,8 +137,17 @@ func ToOpenAIChatRequest(anthropicBody []byte, model string) ([]byte, error) {
 		}
 		out["tools"] = tools
 	}
+	if choice, ok := translateToolChoice(req.ToolChoice); ok {
+		out["tool_choice"] = choice
+	}
 	if req.Stream {
 		out["stream"] = true
+		// stream_options.include_usage is REQUIRED for a spec-conforming
+		// OpenAI backend to emit the trailing usage chunk. Without it the
+		// streaming translator's deferred-finalize path (which exists
+		// precisely to wait for that chunk) can never fire, and every
+		// streaming response reports zero tokens.
+		out["stream_options"] = map[string]interface{}{"include_usage": true}
 	}
 
 	result, err := json.Marshal(out)
@@ -139,6 +170,51 @@ type anthTool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
+}
+
+// translateToolChoice maps Anthropic's tool_choice onto OpenAI's. The two
+// vocabularies correspond directly, so silently dropping the field (the
+// pre-fix behavior) discarded a load-bearing constraint: a caller demanding
+// a specific tool would receive prose instead, with no signal that its
+// instruction had been ignored.
+//
+//	Anthropic {"type":"auto"}                  -> "auto"
+//	Anthropic {"type":"any"}                   -> "required"
+//	Anthropic {"type":"none"}                  -> "none"
+//	Anthropic {"type":"tool","name":"x"}       -> {"type":"function","function":{"name":"x"}}
+//
+// ok is false when the field is absent or unparseable — an unrecognized
+// shape is left off the outbound request rather than guessed at, matching
+// the top_k drop's "no equivalent, so omit" convention.
+func translateToolChoice(raw json.RawMessage) (interface{}, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var tc struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return nil, false
+	}
+	switch tc.Type {
+	case "auto":
+		return "auto", true
+	case "any":
+		return "required", true
+	case "none":
+		return "none", true
+	case "tool":
+		if tc.Name == "" {
+			return nil, false
+		}
+		return map[string]interface{}{
+			"type":     "function",
+			"function": map[string]interface{}{"name": tc.Name},
+		}, true
+	default:
+		return nil, false
+	}
 }
 
 // extractSystemText normalizes Anthropic's `system` field, which occurs in
@@ -212,10 +288,27 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 				"tool_call_id": b.ToolUseID,
 				"content":      toolResultContentToString(b.Content),
 			})
+		default:
+			// An unsupported block type (image, document, thinking, ...)
+			// MUST NOT be dropped silently. Dropping it ships an
+			// incomplete prompt to the backend, which then answers
+			// confidently about content it never saw — the failure is
+			// invisible to the caller and indistinguishable from a real
+			// answer. Failing loudly is the only safe option for a
+			// translating proxy: the caller learns immediately that this
+			// backend cannot serve this request.
+			return nil, fmt.Errorf(
+				"proxy: anthropic content block type %q has no OpenAI Chat Completions equivalent and cannot be translated; route this request to an anthropic-native group (bedrock/litellm) instead",
+				b.Type)
 		}
 	}
 
 	var result []interface{}
+	// OpenAI requires a role:"tool" message to IMMEDIATELY follow the
+	// assistant message carrying the matching tool_calls. Emitting the
+	// turn's own text message first would interpose a user message between
+	// the two and violate that sequencing, so tool results lead.
+	result = append(result, toolResultMessages...)
 	if len(textParts) > 0 || len(toolCalls) > 0 {
 		msg := map[string]interface{}{"role": m.Role}
 		if len(textParts) > 0 {
@@ -228,7 +321,6 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 		}
 		result = append(result, msg)
 	}
-	result = append(result, toolResultMessages...)
 	return result, nil
 }
 
@@ -279,7 +371,7 @@ func jsonNumberToInterface(n json.Number) interface{} {
 
 // FromOpenAIChatResponse translates an OpenAI Chat Completions response
 // body (non-streaming) into an Anthropic /v1/messages response body.
-func FromOpenAIChatResponse(openaiBody []byte) ([]byte, error) {
+func FromOpenAIChatResponse(openaiBody []byte, model string) ([]byte, error) {
 	var resp struct {
 		ID      string `json:"id"`
 		Choices []struct {
@@ -309,7 +401,10 @@ func FromOpenAIChatResponse(openaiBody []byte) ([]byte, error) {
 	}
 	choice := resp.Choices[0]
 
-	var content []interface{}
+	// Non-nil so an empty result marshals to `[]`, not `null` — Anthropic's
+	// schema types content as an array, and a null breaks clients that
+	// iterate it without a guard.
+	content := []interface{}{}
 	if choice.Message.Content != nil && *choice.Message.Content != "" {
 		content = append(content, map[string]interface{}{"type": "text", "text": *choice.Message.Content})
 	}
@@ -326,17 +421,14 @@ func FromOpenAIChatResponse(openaiBody []byte) ([]byte, error) {
 		})
 	}
 
-	stopReason := finishReasonToStopReason[choice.FinishReason]
-	if stopReason == "" {
-		stopReason = choice.FinishReason
-	}
-
 	out := map[string]interface{}{
-		"id":          resp.ID,
-		"type":        "message",
-		"role":        "assistant",
-		"content":     content,
-		"stop_reason": stopReason,
+		"id":            resp.ID,
+		"type":          "message",
+		"role":          "assistant",
+		"content":       content,
+		"model":         model,
+		"stop_reason":   coerceStopReason(choice.FinishReason),
+		"stop_sequence": nil,
 		"usage": map[string]interface{}{
 			"input_tokens":  resp.Usage.PromptTokens,
 			"output_tokens": resp.Usage.CompletionTokens,

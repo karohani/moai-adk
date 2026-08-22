@@ -36,12 +36,22 @@ func handlerFixtureRegistry(litellmBaseURL string) *Registry {
 }
 
 // TestMessagesHandler_RoutesToLiteLLM verifies a request naming a
-// litellm-group model is passthrough-relayed to that group's backend.
+// litellm-group model reaches that group's backend with every field
+// relayed unchanged EXCEPT the model identifier, which carries the
+// resolved value.
+//
+// This test previously asserted byte-identical passthrough including the
+// `work/` group prefix. That encoded a defect: `work/claude-3-5-sonnet` is
+// a name this proxy's own catalog scheme invented, and no LiteLLM instance
+// has a model by that name — the relay could only ever 400. REQ-PROXY-017's
+// "no translation" constrains the request SHAPE (litellm speaks Anthropic
+// natively, so no field mapping happens); it cannot extend to forwarding an
+// identifier the proxy made up.
 func TestMessagesHandler_RoutesToLiteLLM(t *testing.T) {
-	var gotBody string
+	var gotBody map[string]interface{}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
+		_ = json.Unmarshal(b, &gotBody)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -54,7 +64,7 @@ func TestMessagesHandler_RoutesToLiteLLM(t *testing.T) {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}
 
-	body := `{"model":"work/claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"work/claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}],"temperature":0.5}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -62,8 +72,20 @@ func TestMessagesHandler_RoutesToLiteLLM(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if gotBody != body {
-		t.Errorf("backend received %q, want %q (litellm is pure passthrough)", gotBody, body)
+	if gotBody["model"] != "claude-3-5-sonnet" {
+		t.Errorf("backend received model %v, want the resolved %q (group prefix stripped)",
+			gotBody["model"], "claude-3-5-sonnet")
+	}
+	// Every other field relays untouched — the model is the only substitution.
+	if gotBody["temperature"] != 0.5 {
+		t.Errorf("temperature = %v, want 0.5 relayed unchanged", gotBody["temperature"])
+	}
+	msgs, ok := gotBody["messages"].([]interface{})
+	if !ok || len(msgs) != 1 {
+		t.Fatalf("messages = %v, want the original single message relayed", gotBody["messages"])
+	}
+	if m := msgs[0].(map[string]interface{}); m["role"] != "user" || m["content"] != "hi" {
+		t.Errorf("message = %v, want the original {user,hi}", m)
 	}
 }
 
@@ -74,7 +96,7 @@ func TestMessagesHandler_RoutesToBedrock(t *testing.T) {
 	reg := handlerFixtureRegistry("")
 	cat := NewCatalog(reg, []string{"work", "personal", "codex-backend"})
 	fake := &fakeBedrockInvoker{invokeResp: []byte(`{"id":"msg_1","content":[{"type":"text","text":"hi"}]}`)}
-	h, err := NewMessagesHandler(reg, cat, fake)
+	h, err := NewMessagesHandler(reg, cat, map[string]BedrockInvoker{"personal": fake})
 	if err != nil {
 		t.Fatalf("NewMessagesHandler() error = %v", err)
 	}
