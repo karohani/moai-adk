@@ -32,7 +32,10 @@ var finishReasonToStopReason = map[string]string{
 // Field mapping (progress.md §E.2 M3 carries the full table):
 //   - model: KEPT in the body — unlike Bedrock's InvokeModel (which takes
 //     the model out-of-band via a URL parameter), OpenAI Chat Completions
-//     requires "model" as a body field.
+//     requires "model" as a body field. The caller-supplied model param is
+//     used verbatim — NOT the request body's own "model" field, which for
+//     a catalog-resolved deployment still carries the client-facing
+//     "<group>/<model>" alias rather than the backend's real model id.
 //   - system: Anthropic's top-level `system` (a string OR a content-block
 //     array — both forms occur in the wild; Claude Code may send either)
 //     becomes a LEADING message with role "system". Omitted entirely if
@@ -45,9 +48,8 @@ var finishReasonToStopReason = map[string]string{
 //   - messages: Anthropic content-block messages (text / tool_use /
 //     tool_result) are flattened into OpenAI's {role, content, tool_calls}
 //     / {role: "tool", tool_call_id, content} shapes.
-func ToOpenAIChatRequest(anthropicBody []byte) ([]byte, error) {
+func ToOpenAIChatRequest(anthropicBody []byte, model string) ([]byte, error) {
 	var req struct {
-		Model         string          `json:"model"`
 		System        json.RawMessage `json:"system,omitempty"`
 		Messages      []anthMessage   `json:"messages"`
 		MaxTokens     json.Number     `json:"max_tokens,omitempty"`
@@ -63,7 +65,7 @@ func ToOpenAIChatRequest(anthropicBody []byte) ([]byte, error) {
 	}
 
 	out := map[string]interface{}{
-		"model": req.Model,
+		"model": model,
 	}
 
 	var messages []interface{}

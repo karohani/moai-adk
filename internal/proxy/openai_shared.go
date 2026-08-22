@@ -42,7 +42,7 @@ func serveOpenAIShapedMessages(
 	model string,
 	stream bool,
 ) {
-	translated, err := ToOpenAIChatRequest(anthropicBody)
+	translated, err := ToOpenAIChatRequest(anthropicBody, model)
 	if err != nil {
 		http.Error(w, "proxy: "+err.Error(), http.StatusBadRequest)
 		return

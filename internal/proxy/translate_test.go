@@ -22,7 +22,7 @@ func TestToOpenAIChatRequest_BasicFieldMapping(t *testing.T) {
 		"stop_sequences": ["END", "STOP"]
 	}`)
 
-	out, err := ToOpenAIChatRequest(in)
+	out, err := ToOpenAIChatRequest(in, "gpt-oss-120b")
 	if err != nil {
 		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestToOpenAIChatRequest_SystemAsContentBlockArray(t *testing.T) {
 		"messages": [{"role":"user","content":"hi"}]
 	}`)
 
-	out, err := ToOpenAIChatRequest(in)
+	out, err := ToOpenAIChatRequest(in, "m")
 	if err != nil {
 		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestToOpenAIChatRequest_SystemAsContentBlockArray(t *testing.T) {
 // request with no system field produces no leading system message.
 func TestToOpenAIChatRequest_NoSystemFieldOmitsSystemMessage(t *testing.T) {
 	in := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	out, err := ToOpenAIChatRequest(in)
+	out, err := ToOpenAIChatRequest(in, "m")
 	if err != nil {
 		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestToOpenAIChatRequest_ToolsTranslation(t *testing.T) {
 		"messages": [],
 		"tools": [{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}}}}]
 	}`)
-	out, err := ToOpenAIChatRequest(in)
+	out, err := ToOpenAIChatRequest(in, "m")
 	if err != nil {
 		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
 	}
@@ -165,7 +165,7 @@ func TestToOpenAIChatRequest_AssistantToolUseAndToolResultTranslation(t *testing
 			]}
 		]
 	}`)
-	out, err := ToOpenAIChatRequest(in)
+	out, err := ToOpenAIChatRequest(in, "m")
 	if err != nil {
 		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
 	}
@@ -218,9 +218,31 @@ func TestToOpenAIChatRequest_AssistantToolUseAndToolResultTranslation(t *testing
 // TestToOpenAIChatRequest_MalformedJSONIsError verifies malformed input is
 // rejected explicitly.
 func TestToOpenAIChatRequest_MalformedJSONIsError(t *testing.T) {
-	_, err := ToOpenAIChatRequest([]byte(`{not json`))
+	_, err := ToOpenAIChatRequest([]byte(`{not json`), "m")
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
+	}
+}
+
+// TestToOpenAIChatRequest_UsesCallerModelNotBodyModel is a regression test
+// for a live-testing-discovered bug: the outbound "model" field MUST come
+// from the caller-supplied model param (the catalog-resolved backend model
+// id), NOT from the request body's own "model" field. The body's model is
+// the client-facing catalog reference (e.g. "codex-local/gpt-5.3-codex-spark"
+// for a direct <group>/<model> reference) — sending it verbatim to the
+// backend causes the backend to reject an unknown model name.
+func TestToOpenAIChatRequest_UsesCallerModelNotBodyModel(t *testing.T) {
+	in := []byte(`{"model":"codex-local/gpt-5.3-codex-spark","messages":[{"role":"user","content":"hi"}]}`)
+	out, err := ToOpenAIChatRequest(in, "gpt-5.3-codex-spark")
+	if err != nil {
+		t.Fatalf("ToOpenAIChatRequest() error = %v", err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if got["model"] != "gpt-5.3-codex-spark" {
+		t.Errorf("model = %v, want gpt-5.3-codex-spark (the resolved model param, not the body's group-prefixed reference)", got["model"])
 	}
 }
 
