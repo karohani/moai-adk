@@ -210,28 +210,51 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	daemon := proxy.NewDaemon(stateDir)
-	addr, err := daemon.Acquire(func() (string, func() error, error) {
+	startedHere := false
+	session, err := daemon.AcquireSession(activeGroups, func(token string) (string, func() error, error) {
+		startedHere = true
 		cat := proxy.NewCatalog(reg, activeGroups)
 		handler, herr := proxy.NewMessagesHandler(reg, cat, bedrockInvokers)
 		if herr != nil {
 			return "", nil, herr
 		}
-		return proxy.StartServer(handler)
+		return proxy.StartServer(handler.WithAuthToken(token))
 	})
 	if err != nil {
 		return fmt.Errorf("moai proxy: acquire daemon: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "moai proxy: daemon listening at %s (active groups: %v)\n", addr, activeGroups)
+	fmt.Fprintf(os.Stderr, "moai proxy: daemon listening at %s (active groups: %v)\n", session.Address, activeGroups)
 
 	defer func() {
-		if _, rerr := daemon.Release(); rerr != nil {
+		remaining, rerr := daemon.Release()
+		if rerr != nil {
 			fmt.Fprintf(os.Stderr, "moai proxy: release daemon reference: %v\n", rerr)
+			return
+		}
+		// The server runs INSIDE this process. If this invocation started it
+		// and other sessions are still holding references, those sessions
+		// lose their proxy the moment this process exits — the listener dies
+		// with its host. Detaching the daemon into its own process is the
+		// real fix and is a separate change; until then the failure is at
+		// least announced rather than silent.
+		if startedHere && remaining > 0 {
+			fmt.Fprintf(os.Stderr,
+				"moai proxy: WARNING — this invocation started the daemon and %d other session(s) still reference it.\n"+
+					"           The proxy stops when this process exits; those sessions will lose their backend.\n"+
+					"           Restart them with `moai proxy` after this exits.\n", remaining)
 		}
 	}()
 
 	child := exec.Command("claude", claudeArgs...)
-	child.Env = append(os.Environ(), config.EnvAnthropicBaseURL+"=http://"+addr)
+	// ANTHROPIC_AUTH_TOKEN is how Claude Code authenticates against a custom
+	// ANTHROPIC_BASE_URL — the same mechanism `moai glm` relies on. The
+	// daemon requires it, so an unrelated local process that discovers the
+	// port cannot spend the backend credentials this daemon holds.
+	child.Env = append(os.Environ(),
+		config.EnvAnthropicBaseURL+"=http://"+session.Address,
+		config.EnvAnthropicAuthToken+"="+session.Token,
+	)
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr

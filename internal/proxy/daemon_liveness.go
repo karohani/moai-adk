@@ -1,7 +1,12 @@
 package proxy
 
 import (
-	"net"
+	"crypto/hmac"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
 	"time"
 )
 
@@ -31,10 +36,48 @@ func daemonStateIsLive(st DaemonState) bool {
 	if st.Address == "" {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp", st.Address, daemonLivenessDialTimeout)
+
+	// A bare TCP dial proves only that SOMETHING occupies the port. After a
+	// daemon dies any process can bind the freed address, and this state
+	// file is what decides where Claude Code's ANTHROPIC_BASE_URL points —
+	// accepting an impostor would hand it the whole session.
+	//
+	// Identity is established by challenge-response rather than by sending
+	// the token: presenting a bearer token to an unverified listener gives
+	// the token to whatever answers, which is precisely the case being
+	// tested for. The daemon returns HMAC(token, nonce); a listener that
+	// does not hold the token cannot produce it.
+	client := &http.Client{Timeout: daemonLivenessDialTimeout}
+
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return false
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+
+	resp, err := client.Get("http://" + st.Address + healthPath + "?nonce=" + nonce)
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
-	return true
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	if st.Token == "" {
+		// State written before tokens existed carries nothing to verify
+		// against, so reachability is all that can be established. Checked
+		// BEFORE decoding: such a daemon may not answer with a proof body
+		// at all, and refusing to reuse a live daemon over a missing field
+		// it was never expected to send would be a false negative.
+		return true
+	}
+
+	var payload struct {
+		Proof string `json:"proof"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&payload); err != nil {
+		return false
+	}
+	return hmac.Equal([]byte(payload.Proof), []byte(healthProof(st.Token, nonce)))
 }

@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -856,5 +857,201 @@ func TestReplaceModelField_PreservesValueFidelity(t *testing.T) {
 		if !strings.Contains(s, must) {
 			t.Errorf("output lost %s: %s", must, s)
 		}
+	}
+}
+
+// ---- Round 3: closing the remaining deferred items ----
+
+func authFixtureHandler(t *testing.T, token string) *MessagesHandler {
+	t.Helper()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[]}`))
+	}))
+	t.Cleanup(backend.Close)
+	reg := &Registry{
+		Groups: map[string]Group{"llm": {Type: GroupTypeLiteLLM, BaseURL: backend.URL}},
+		Sets:   map[string][]string{},
+	}
+	h, err := NewMessagesHandler(reg, NewCatalog(reg, []string{"llm"}), nil)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	return h.WithAuthToken(token)
+}
+
+// The daemon holds live credentials for every backend and binds loopback,
+// which excludes remote peers but not local ones. Without a token any
+// process running as this user can spend them.
+func TestHandler_RequiresAuthToken(t *testing.T) {
+	h := authFixtureHandler(t, "secret-token")
+	body := `{"model":"llm/m","messages":[{"role":"user","content":"hi"}]}`
+
+	t.Run("no credential is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", w.Code)
+		}
+	})
+
+	t.Run("wrong credential is rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer wrong")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", w.Code)
+		}
+	})
+
+	// Anthropic clients emit one form or the other depending on whether
+	// ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is set; both must work or
+	// the proxy breaks for half its callers.
+	for _, hdr := range []struct{ name, key, val string }{
+		{"Authorization Bearer", "Authorization", "Bearer secret-token"},
+		{"x-api-key", "x-api-key", "secret-token"},
+	} {
+		t.Run(hdr.name+" is accepted", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+			req.Header.Set(hdr.key, hdr.val)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// The health endpoint proves identity by challenge-response rather than by
+// consuming a bearer token. Presenting the token to an unverified listener
+// would hand it to whatever answers — which is exactly the impostor case the
+// probe exists to detect.
+func TestHandler_HealthEndpointProvesIdentityWithoutConsumingToken(t *testing.T) {
+	h := authFixtureHandler(t, "secret-token")
+
+	req := httptest.NewRequest(http.MethodGet, healthPath+"?nonce=abc123", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req) // NO credential presented
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 without any credential", w.Code)
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("health body is not JSON: %v", err)
+	}
+	if got["proof"] != healthProof("secret-token", "abc123") {
+		t.Errorf("proof = %v, want HMAC(token, nonce)", got["proof"])
+	}
+	// The token itself must never appear in the response.
+	if strings.Contains(w.Body.String(), "secret-token") {
+		t.Errorf("health response leaked the token: %s", w.Body.String())
+	}
+
+	// A different nonce yields a different proof — replay of one proof
+	// against a fresh challenge fails.
+	req2 := httptest.NewRequest(http.MethodGet, healthPath+"?nonce=zzz", nil)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+	var got2 map[string]interface{}
+	_ = json.Unmarshal(w2.Body.Bytes(), &got2)
+	if got2["proof"] == got["proof"] {
+		t.Error("proof is nonce-independent — a captured proof could be replayed")
+	}
+}
+
+// A squatter that binds the freed port after a daemon dies must NOT pass the
+// liveness probe — otherwise the state file would point Claude Code's
+// ANTHROPIC_BASE_URL at it.
+func TestDaemonStateIsLive_RejectsImpostorListener(t *testing.T) {
+	impostor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // answers everything, holds no token
+	}))
+	defer impostor.Close()
+	addr := strings.TrimPrefix(impostor.URL, "http://")
+
+	if daemonStateIsLive(DaemonState{Address: addr, Token: "our-token"}) {
+		t.Error("a listener that does not hold our token was accepted as the daemon")
+	}
+
+	// Our own daemon passes.
+	real := httptest.NewServer(authFixtureHandler(t, "our-token"))
+	defer real.Close()
+	if !daemonStateIsLive(DaemonState{Address: strings.TrimPrefix(real.URL, "http://"), Token: "our-token"}) {
+		t.Error("the real daemon was reported dead")
+	}
+}
+
+// A joiner whose resolved group set differs cannot be served correctly —
+// Acquire reuses the address without rebuilding the catalog, so its aliases
+// would silently resolve through the starter's groups.
+func TestAcquireSession_RefusesActiveGroupMismatch(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "proxy")
+	alwaysLive := func(DaemonState) bool { return true }
+	starter := NewDaemon(stateDir).withLiveness(alwaysLive)
+	joiner := NewDaemon(stateDir).withLiveness(alwaysLive)
+
+	factory := func(string) (string, func() error, error) {
+		return "127.0.0.1:65020", func() error { return nil }, nil
+	}
+	if _, err := starter.AcquireSession([]string{"work"}, factory); err != nil {
+		t.Fatalf("starter: %v", err)
+	}
+
+	_, err := joiner.AcquireSession([]string{"personal"}, factory)
+	if err == nil {
+		t.Fatal("a joiner with a different active set was admitted — its aliases would misroute silently")
+	}
+	if !errors.Is(err, ErrActiveGroupMismatch) {
+		t.Errorf("error = %v, want ErrActiveGroupMismatch", err)
+	}
+	for _, want := range []string{"work", "personal"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should name both sets", err)
+		}
+	}
+
+	// The SAME set joins cleanly and receives the starter's token.
+	s, err := joiner.AcquireSession([]string{"work"}, factory)
+	if err != nil {
+		t.Fatalf("matching joiner refused: %v", err)
+	}
+	if s.Token == "" {
+		t.Error("joiner received no auth token")
+	}
+}
+
+// AcquireSession mints a token and persists it in the (0600) state file.
+func TestAcquireSession_MintsAndPersistsToken(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "proxy")
+	d := NewDaemon(stateDir).withLiveness(func(DaemonState) bool { return true })
+
+	var handed string
+	s, err := d.AcquireSession([]string{"g"}, func(token string) (string, func() error, error) {
+		handed = token
+		return "127.0.0.1:65021", func() error { return nil }, nil
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if s.Token == "" || s.Token != handed {
+		t.Errorf("token handed to factory %q vs returned %q — must be the same non-empty value", handed, s.Token)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(stateDir, daemonStateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st DaemonState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Token != s.Token {
+		t.Errorf("state file token = %q, want the minted token", st.Token)
+	}
+	if len(st.ActiveGroups) != 1 || st.ActiveGroups[0] != "g" {
+		t.Errorf("state ActiveGroups = %v, want [g]", st.ActiveGroups)
 	}
 }

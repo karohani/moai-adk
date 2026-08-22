@@ -2,12 +2,17 @@ package proxy
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 )
 
@@ -55,6 +60,58 @@ type MessagesHandler struct {
 	// iteration order and therefore changed between daemon restarts.
 	bedrocks     map[string]BedrockInvoker
 	openaiClient *http.Client // shared HTTP client for openai-compatible / codex backend calls
+	// authToken gates every request. Loopback binding keeps REMOTE peers
+	// out; it does nothing about local ones, and this process holds live
+	// credentials for every configured backend. Empty means the handler was
+	// constructed without auth (tests and the legacy constructor).
+	authToken string
+}
+
+// WithAuthToken returns h gated on token. Requests must present it as
+// `Authorization: Bearer <token>` or `x-api-key: <token>` — both forms are
+// accepted because that is the pair Anthropic clients emit depending on
+// whether ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is set.
+func (h *MessagesHandler) WithAuthToken(token string) *MessagesHandler {
+	clone := *h
+	clone.authToken = token
+	return &clone
+}
+
+// healthPath is the liveness surface. It is deliberately NOT bearer-gated:
+// a probe that presents the token to an unverified listener hands the token
+// to whatever answers, which is exactly the impostor case the probe exists
+// to detect. Instead the caller supplies a nonce and the daemon returns
+// HMAC(token, nonce) — proof of the shared secret that leaks nothing a
+// listener could replay to a different endpoint.
+const healthPath = "/healthz"
+
+// healthProof computes the identity proof returned by healthPath.
+func healthProof(token, nonce string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	_, _ = mac.Write([]byte(nonce))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// requestAuthToken extracts the caller's presented token from either
+// accepted header form.
+func requestAuthToken(r *http.Request) string {
+	if v := r.Header.Get("Authorization"); v != "" {
+		if after, found := strings.CutPrefix(v, "Bearer "); found {
+			return strings.TrimSpace(after)
+		}
+	}
+	return strings.TrimSpace(r.Header.Get("x-api-key"))
+}
+
+// authorize reports whether r carries the daemon's token. Comparison is
+// constant-time so a local caller cannot recover the token byte by byte
+// from response timing.
+func (h *MessagesHandler) authorize(r *http.Request) bool {
+	if h.authToken == "" {
+		return true // handler constructed without auth
+	}
+	presented := requestAuthToken(r)
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(h.authToken)) == 1
 }
 
 // NewMessagesHandler constructs a MessagesHandler for reg/catalog. bedrocks
@@ -98,6 +155,15 @@ func NewMessagesHandler(reg *Registry, catalog *Catalog, bedrocks map[string]Bed
 }
 
 func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL != nil && r.URL.Path == healthPath {
+		h.serveHealth(w, r)
+		return
+	}
+	if !h.authorize(r) {
+		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error",
+			"request did not present the daemon's auth token")
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "proxy: only POST is supported on /v1/messages", http.StatusMethodNotAllowed)
 		return
@@ -156,6 +222,23 @@ func (h *MessagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// compatibility, but no backend adapter is implemented in v1.
 		http.Error(w, fmt.Sprintf("proxy: group type %q is not yet wired into the daemon /v1/messages surface", group.Type), http.StatusNotImplemented)
 	}
+}
+
+// serveHealth answers the liveness probe with a proof of the shared secret.
+// It never reads a credential from the request, so probing a hostile
+// listener cannot leak the token to it.
+func (h *MessagesHandler) serveHealth(w http.ResponseWriter, r *http.Request) {
+	nonce := ""
+	if r.URL != nil {
+		nonce = r.URL.Query().Get("nonce")
+	}
+	resp := map[string]interface{}{"status": "ok", "service": "moai-proxy"}
+	if h.authToken != "" && nonce != "" {
+		resp["proof"] = healthProof(h.authToken, nonce)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *MessagesHandler) serveLiteLLM(w http.ResponseWriter, r *http.Request, groupName string, body []byte, model string) {
