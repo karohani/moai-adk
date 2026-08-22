@@ -12,6 +12,10 @@ import (
 // in-flight requests to drain before forcing a close.
 const shutdownTimeout = 5 * time.Second
 
+// readHeaderTimeout bounds how long a client may take to send request
+// headers (gosec G112 / slowloris).
+const readHeaderTimeout = 10 * time.Second
+
 // StartServer binds a loopback-only listener on an OS-assigned unprivileged
 // port (REQ-PROXY-022, REQ-PROXY-023) and serves handler on it. It returns
 // the bound address, a stop function for graceful shutdown, and an error.
@@ -27,7 +31,15 @@ func StartServer(handler http.Handler) (address string, stop func() error, err e
 		return "", nil, fmt.Errorf("proxy server: listen: %w", err)
 	}
 
-	srv := &http.Server{Handler: handler}
+	// ReadHeaderTimeout bounds slow-header (slowloris) requests. The daemon
+	// is a machine-wide singleton shared by every project, so one stalled
+	// local request would otherwise degrade every session on the box.
+	// ReadTimeout/WriteTimeout are deliberately NOT set: streaming responses
+	// are long-lived by design and a write deadline would truncate them.
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
 
 	serveErrCh := make(chan error, 1)
 	go func() {

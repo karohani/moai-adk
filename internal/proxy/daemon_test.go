@@ -56,8 +56,9 @@ func TestDaemon_AcquireStartsServerOnFirstCall(t *testing.T) {
 func TestDaemon_AcquireFromTwoCallersSharesOneDaemon(t *testing.T) {
 	stateDir := t.TempDir() // shared machine-scope state dir
 
-	callerA := NewDaemon(stateDir) // simulates project dir 1
-	callerB := NewDaemon(stateDir) // simulates project dir 2 (different cwd)
+	alwaysLive := func(DaemonState) bool { return true }
+	callerA := NewDaemon(stateDir).withLiveness(alwaysLive) // simulates project dir 1
+	callerB := NewDaemon(stateDir).withLiveness(alwaysLive) // simulates project dir 2 (different cwd)
 
 	callsA := 0
 	factoryA := func() (string, func() error, error) {
@@ -102,8 +103,9 @@ func TestDaemon_AcquireFromTwoCallersSharesOneDaemon(t *testing.T) {
 // shared refcount without stopping the server while other holders remain.
 func TestDaemon_ReleaseDecrementsRefCount(t *testing.T) {
 	stateDir := t.TempDir()
-	callerA := NewDaemon(stateDir)
-	callerB := NewDaemon(stateDir)
+	alwaysLive := func(DaemonState) bool { return true }
+	callerA := NewDaemon(stateDir).withLiveness(alwaysLive)
+	callerB := NewDaemon(stateDir).withLiveness(alwaysLive)
 
 	factory := func() (string, func() error, error) {
 		return "127.0.0.1:8003", func() error { return nil }, nil

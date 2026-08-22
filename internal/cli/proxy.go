@@ -104,42 +104,53 @@ func resolveProxyRegistryPath() (string, error) {
 // through past to the machine registry default (or its own hard error).
 func resolveProxyActiveGroups(reg *proxy.Registry, groups []string, set string, projectRoot string) ([]string, error) {
 	var projectDefaultSet string
-	if cfg, err := config.NewConfigManager().Load(projectRoot); err == nil && cfg != nil {
+	cfg, err := config.NewConfigManager().Load(projectRoot)
+	if err != nil {
+		// A project with NO config at all is not an error (the loader
+		// returns defaults with a nil error, handled below). Reaching here
+		// means a config EXISTS but could not be read — malformed YAML,
+		// bad permissions, a truncated file. Falling through to the machine
+		// default set would silently route this project's prompts to a
+		// different backend and account than it declared, with no signal.
+		// The two cases demand opposite responses, so they must not share
+		// one branch.
+		return nil, fmt.Errorf("proxy: read project config at %s: %w", projectRoot, err)
+	}
+	if cfg != nil {
 		projectDefaultSet = cfg.LLM.Proxy.DefaultSet
 	}
 	return proxy.ResolveActiveGroups(reg, groups, set, projectDefaultSet)
 }
 
-// firstBedrockGroup returns the first bedrock-typed group found in reg, if
-// any. moai proxy's daemon constructs at most ONE shared BedrockInvoker
-// (the region/profile of whichever bedrock group is found first) — a
-// pre-existing simplification inherited from M2/M3's MessagesHandler
-// design (a single BedrockInvoker field, not one per bedrock group); not
-// addressed in M4, which is CLI wiring only. See progress.md §E.2 M4
-// Residual risk.
-func firstBedrockGroup(reg *proxy.Registry) (proxy.Group, string, bool) {
+// buildProxyBedrockInvokers constructs ONE BedrockInvoker per registered
+// bedrock group, keyed by group name, or returns (nil, nil) when no bedrock
+// group is registered — nil is a valid "no bedrock configured" state per
+// proxy.NewMessagesHandler's contract.
+//
+// The previous implementation built a single invoker from whichever bedrock
+// group Go's randomized map iteration yielded first, and every bedrock
+// request then used it regardless of the group the catalog resolved. With
+// two bedrock groups that silently signed requests with the wrong account's
+// credentials against the wrong region — and flipped between daemon
+// restarts, which is the hardest possible shape to diagnose. Building per
+// group makes the resolved group's own region and profile authoritative,
+// which is what AC-PROXY-003 ("two bedrock regions coexist") requires.
+func buildProxyBedrockInvokers(ctx context.Context, reg *proxy.Registry) (map[string]proxy.BedrockInvoker, error) {
+	var invokers map[string]proxy.BedrockInvoker
 	for name, g := range reg.Groups {
-		if g.Type == proxy.GroupTypeBedrock {
-			return g, name, true
+		if g.Type != proxy.GroupTypeBedrock {
+			continue
 		}
+		inv, err := proxy.NewAWSBedrockInvoker(ctx, g.Region, g.Profile)
+		if err != nil {
+			return nil, fmt.Errorf("build bedrock invoker for group %q: %w", name, err)
+		}
+		if invokers == nil {
+			invokers = make(map[string]proxy.BedrockInvoker)
+		}
+		invokers[name] = inv
 	}
-	return proxy.Group{}, "", false
-}
-
-// buildProxyBedrockInvoker constructs the daemon's shared BedrockInvoker
-// from the first registered bedrock group, or returns (nil, nil) when no
-// bedrock group is registered — nil is a valid "no bedrock configured"
-// state per proxy.NewMessagesHandler's contract.
-func buildProxyBedrockInvoker(ctx context.Context, reg *proxy.Registry) (proxy.BedrockInvoker, error) {
-	g, name, ok := firstBedrockGroup(reg)
-	if !ok {
-		return nil, nil
-	}
-	inv, err := proxy.NewAWSBedrockInvoker(ctx, g.Region, g.Profile)
-	if err != nil {
-		return nil, fmt.Errorf("build bedrock invoker for group %q: %w", name, err)
-	}
-	return inv, nil
+	return invokers, nil
 }
 
 // runProxy is the RunE entry point. Standard cobra flag parsing (not
@@ -175,20 +186,20 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	bedrockInvoker, err := buildProxyBedrockInvoker(ctx, reg)
+	bedrockInvokers, err := buildProxyBedrockInvokers(ctx, reg)
 	if err != nil {
 		// A misconfigured bedrock group does not block the daemon from
 		// starting for every OTHER group type — same isolation shape as
 		// REQ-PROXY-021 — it just means bedrock-typed requests will fail
 		// per-request instead of at startup.
 		fmt.Fprintf(os.Stderr, "moai proxy: bedrock invoker unavailable, bedrock-typed groups will be inactive: %v\n", err)
-		bedrockInvoker = nil
+		bedrockInvokers = nil
 	}
 
 	daemon := proxy.NewDaemon(stateDir)
 	addr, err := daemon.Acquire(func() (string, func() error, error) {
 		cat := proxy.NewCatalog(reg, activeGroups)
-		handler, herr := proxy.NewMessagesHandler(reg, cat, bedrockInvoker)
+		handler, herr := proxy.NewMessagesHandler(reg, cat, bedrockInvokers)
 		if herr != nil {
 			return "", nil, herr
 		}

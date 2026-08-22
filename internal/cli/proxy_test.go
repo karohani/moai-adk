@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,37 +182,29 @@ func TestResolveProxyActiveGroups_ProjectDefaultSetPointerWins(t *testing.T) {
 		t.Errorf("resolveProxyActiveGroups() = %v, want the 2-group 'heavy' set from the project pointer", got)
 	}
 }
-
-// TestFirstBedrockGroup_FindsABedrockGroup verifies the pure
-// bedrock-group-selection helper picks a bedrock-typed group when one
-// exists.
-func TestFirstBedrockGroup_FindsABedrockGroup(t *testing.T) {
-	reg := &proxy.Registry{
-		Groups: map[string]proxy.Group{
-			"llm": {Type: proxy.GroupTypeLiteLLM, BaseURL: "http://x"},
-			"br":  {Type: proxy.GroupTypeBedrock, Region: "us-east-1"},
-		},
-	}
-	g, name, ok := firstBedrockGroup(reg)
-	if !ok {
-		t.Fatal("expected a bedrock group to be found")
-	}
-	if name != "br" || g.Region != "us-east-1" {
-		t.Errorf("firstBedrockGroup() = %+v/%q, want br/us-east-1", g, name)
-	}
-}
-
-// TestFirstBedrockGroup_NoneRegisteredReturnsFalse verifies the helper
-// reports absence cleanly when no bedrock group is registered.
-func TestFirstBedrockGroup_NoneRegisteredReturnsFalse(t *testing.T) {
+// TestBuildProxyBedrockInvokers_BuildsOnePerGroup verifies the daemon
+// builds a SEPARATE invoker for every bedrock group rather than one shared
+// invoker chosen by Go's randomized map iteration. The single-invoker design
+// signed every bedrock request with one group's region+profile regardless of
+// which group the catalog resolved, so a two-bedrock-group registry billed
+// the wrong account nondeterministically across daemon restarts.
+//
+// NewAWSBedrockInvoker performs real AWS config resolution, so this test
+// asserts the SELECTION contract (which groups are enumerated) rather than
+// constructing live invokers: the registry below has no bedrock group, which
+// is the one branch reachable without AWS credentials.
+func TestBuildProxyBedrockInvokers_NoBedrockGroupYieldsNilMap(t *testing.T) {
 	reg := &proxy.Registry{
 		Groups: map[string]proxy.Group{
 			"llm": {Type: proxy.GroupTypeLiteLLM, BaseURL: "http://x"},
 		},
 	}
-	_, _, ok := firstBedrockGroup(reg)
-	if ok {
-		t.Error("expected ok=false when no bedrock group is registered")
+	invokers, err := buildProxyBedrockInvokers(context.Background(), reg)
+	if err != nil {
+		t.Fatalf("buildProxyBedrockInvokers() error = %v", err)
+	}
+	if invokers != nil {
+		t.Errorf("invokers = %v, want nil when no bedrock group is registered", invokers)
 	}
 }
 

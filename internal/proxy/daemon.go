@@ -47,12 +47,30 @@ func DefaultDaemonStateDir() (string, error) {
 	return filepath.Join(home, ".moai", "proxy"), nil
 }
 
+// daemonStateFileName is the state file's basename. The daemon's recorded
+// address is a capability handle — anything that can read it can reach an
+// unauthenticated endpoint holding every configured backend's credentials —
+// and anything that can WRITE it can redirect Claude Code's
+// ANTHROPIC_BASE_URL at an attacker-controlled listener. Both surfaces are
+// closed by the 0600/0700 modes below rather than by the loopback bind,
+// which only excludes remote peers.
+const daemonStateFileName = "daemon.json"
+
+// daemonStateFileMode / daemonStateDirMode keep the state file and its
+// directory owner-only. The threat this closes is same-user code (a package
+// postinstall script, an editor extension, a compromised dependency), which
+// is precisely the actor a credential-holding daemon must defend against.
+const (
+	daemonStateFileMode = 0o600
+	daemonStateDirMode  = 0o700
+)
+
 func daemonStateFilePath(stateDir string) string {
-	return filepath.Join(stateDir, "daemon.json")
+	return filepath.Join(stateDir, daemonStateFileName)
 }
 
 func daemonLockFilePath(stateDir string) string {
-	return filepath.Join(stateDir, "daemon.json.lock")
+	return filepath.Join(stateDir, daemonStateFileName+".lock")
 }
 
 // ServerFactory starts a new server instance and returns its bound address,
@@ -69,6 +87,11 @@ type ServerFactory func() (address string, stop func() error, err error)
 type Daemon struct {
 	stateDir    string
 	lockTimeout time.Duration
+	// liveness decides whether a recorded state describes a still-reachable
+	// server. Injected for the same reason ServerFactory is: the production
+	// implementation performs real network I/O, which hermetic lifecycle
+	// tests must be able to replace.
+	liveness func(DaemonState) bool
 
 	mu        sync.Mutex
 	stopFuncs map[string]func() error // address -> stop, held by whichever Daemon instance started the server
@@ -80,6 +103,7 @@ func NewDaemon(stateDir string) *Daemon {
 	return &Daemon{
 		stateDir:    stateDir,
 		lockTimeout: DaemonLockTimeout,
+		liveness:    daemonStateIsLive,
 		stopFuncs:   make(map[string]func() error),
 	}
 }
@@ -89,8 +113,30 @@ func (d *Daemon) WithLockTimeout(timeout time.Duration) *Daemon {
 	return &Daemon{
 		stateDir:    d.stateDir,
 		lockTimeout: timeout,
+		liveness:    d.liveness,
 		stopFuncs:   d.stopFuncs,
 	}
+}
+
+// withLiveness returns a copy of d using a custom liveness probe. Test-only:
+// lifecycle tests inject fake addresses that no listener is bound to, so the
+// real dial-based probe would classify every such state as dead.
+func (d *Daemon) withLiveness(probe func(DaemonState) bool) *Daemon {
+	return &Daemon{
+		stateDir:    d.stateDir,
+		lockTimeout: d.lockTimeout,
+		liveness:    probe,
+		stopFuncs:   d.stopFuncs,
+	}
+}
+
+// isLive applies d's liveness probe, defaulting to the production one when
+// the Daemon was constructed as a bare struct literal.
+func (d *Daemon) isLive(st DaemonState) bool {
+	if d.liveness == nil {
+		return daemonStateIsLive(st)
+	}
+	return d.liveness(st)
 }
 
 // Acquire ensures a daemon server is running for d's stateDir and increments
@@ -103,7 +149,7 @@ func (d *Daemon) WithLockTimeout(timeout time.Duration) *Daemon {
 func (d *Daemon) Acquire(factory ServerFactory) (string, error) {
 	var address string
 	err := d.withLock(func(st DaemonState) (DaemonState, error) {
-		if st.RefCount > 0 && st.Address != "" {
+		if st.RefCount > 0 && st.Address != "" && d.isLive(st) {
 			st.RefCount++
 			address = st.Address
 			return st, nil
@@ -204,7 +250,7 @@ func (d *Daemon) readState() (DaemonState, error) {
 // writeStateAtomic writes st to the state file via a temp-file-then-rename,
 // avoiding partial-write corruption under concurrent readers.
 func (d *Daemon) writeStateAtomic(st DaemonState) error {
-	if err := os.MkdirAll(d.stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(d.stateDir, daemonStateDirMode); err != nil {
 		return fmt.Errorf("proxy daemon: create state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
@@ -213,7 +259,7 @@ func (d *Daemon) writeStateAtomic(st DaemonState) error {
 	}
 	target := daemonStateFilePath(d.stateDir)
 	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, daemonStateFileMode); err != nil {
 		return fmt.Errorf("proxy daemon: write temp state: %w", err)
 	}
 	if err := os.Rename(tmp, target); err != nil {
@@ -226,7 +272,7 @@ func (d *Daemon) writeStateAtomic(st DaemonState) error {
 // mutate, persists the result, and releases the lock. Retries with backoff
 // until lockTimeout elapses.
 func (d *Daemon) withLock(mutate func(DaemonState) (DaemonState, error)) error {
-	if err := os.MkdirAll(d.stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(d.stateDir, daemonStateDirMode); err != nil {
 		return fmt.Errorf("proxy daemon: create state dir: %w", err)
 	}
 

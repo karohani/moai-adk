@@ -29,7 +29,7 @@ func (l *daemonLock) acquire(lockPath string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC, 0o644)
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return fmt.Errorf("proxy daemon lock open %s: %w", lockPath, err)
 	}
