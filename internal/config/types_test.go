@@ -242,6 +242,41 @@ func TestLLMConfigFields(t *testing.T) {
 	}
 }
 
+// TestLLMConfig_ProxyDefaultSet verifies the SPEC-PROXY-001 M1 field
+// llm.proxy.default_set: a project-level pointer to a set name defined in
+// the machine registry (design.md §3.1, §3.3). This is the ONLY field the
+// project layer carries for `moai proxy` — group definitions live in the
+// machine registry, never here.
+func TestLLMConfig_ProxyDefaultSet(t *testing.T) {
+	t.Parallel()
+
+	cfg := LLMConfig{
+		Proxy: LLMProxyConfig{DefaultSet: "cheap"},
+	}
+	if cfg.Proxy.DefaultSet != "cheap" {
+		t.Errorf("Proxy.DefaultSet: got %q, want %q", cfg.Proxy.DefaultSet, "cheap")
+	}
+}
+
+// TestLLMProxyConfig_CarriesNoCredentialFields verifies AC-PROXY-016 /
+// REQ-PROXY-024 at the schema level: the project-side llm.proxy block can
+// only ever carry a set-name pointer — it has no field shaped like a
+// credential (token, API key, secret, password).
+func TestLLMProxyConfig_CarriesNoCredentialFields(t *testing.T) {
+	t.Parallel()
+
+	forbidden := []string{"token", "api_key", "apikey", "secret", "password", "credential"}
+	typ := reflect.TypeOf(LLMProxyConfig{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := strings.ToLower(typ.Field(i).Tag.Get("yaml"))
+		for _, bad := range forbidden {
+			if strings.Contains(tag, bad) {
+				t.Errorf("LLMProxyConfig field %q (yaml tag %q) looks credential-shaped — forbidden by REQ-PROXY-024", typ.Field(i).Name, tag)
+			}
+		}
+	}
+}
+
 func TestPricingConfigFields(t *testing.T) {
 	t.Parallel()
 

@@ -1125,6 +1125,9 @@
 - path: "llm.profiles.medium.sync-auditor.model"
   class: W
   evidence: reader
+- path: "llm.proxy.default_set"
+  class: W
+  evidence: reader
 - path: "llm.team_mode"
   class: W
   evidence: reader
