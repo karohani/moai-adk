@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -57,7 +58,28 @@ func backendChatCompletionsURL(baseURL string) (string, error) {
 		return "", fmt.Errorf("base_url %q must not carry a query string or fragment", baseURL)
 	}
 
+	if isLinkLocalHost(parsed.Hostname()) {
+		// No LLM backend lives on the link-local range; what does live
+		// there is the cloud instance-metadata service. This check cannot
+		// establish that an arbitrary host is TRUSTED — the whole point of
+		// an openai-compatible group is that the operator names their own
+		// cluster at an arbitrary address — but it does remove the one
+		// destination class that is never a legitimate backend and is the
+		// classic SSRF target.
+		return "", fmt.Errorf("base_url %q targets the link-local/metadata range, which is never a valid LLM backend", baseURL)
+	}
+
 	joined := *parsed
 	joined.Path = strings.TrimSuffix(parsed.Path, "/") + "/chat/completions"
 	return joined.String(), nil
+}
+
+// isLinkLocalHost reports whether host is an IPv4/IPv6 link-local address
+// (169.254.0.0/16, fe80::/10) — the cloud instance-metadata range.
+func isLinkLocalHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }

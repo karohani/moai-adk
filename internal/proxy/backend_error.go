@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 )
 
 // backendErrorBodyLimit caps how much of an upstream error body is read.
@@ -88,6 +89,26 @@ func anthropicErrorType(status int) string {
 // field is surfaced — the surrounding envelope (which is where identifiers
 // and key fragments tend to live) is discarded.
 func backendErrorMessage(raw []byte) string {
+	return redactSecretLikeTokens(extractBackendMessage(raw))
+}
+
+// secretLikeToken matches the shapes provider errors quote back: API keys
+// with a vendor prefix, and long opaque bearer-ish blobs.
+var secretLikeToken = regexp.MustCompile(
+	`\b(?:sk|pk|rk|api|key|tok|ghp|gho|xox[abpsr])[-_][A-Za-z0-9_\-]{8,}\b` +
+		`|\bBearer\s+[A-Za-z0-9._\-]{16,}\b` +
+		`|\beyJ[A-Za-z0-9._\-]{16,}\b`) // JWT
+
+// redactSecretLikeTokens removes credential-shaped substrings from a message
+// before it reaches the client. Surfacing only the provider's `message`
+// field (rather than the whole envelope) was not sufficient on its own:
+// providers routinely quote the offending key INSIDE that message, e.g.
+// "Incorrect API key provided: sk-…XYZ".
+func redactSecretLikeTokens(msg string) string {
+	return secretLikeToken.ReplaceAllString(msg, "[redacted]")
+}
+
+func extractBackendMessage(raw []byte) string {
 	if len(raw) == 0 {
 		return "backend returned an error with no body"
 	}

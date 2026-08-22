@@ -103,6 +103,14 @@ func resolveProxyRegistryPath() (string, error) {
 // empty default_set pointer, which proxy.ResolveActiveGroups then falls
 // through past to the machine registry default (or its own hard error).
 func resolveProxyActiveGroups(reg *proxy.Registry, groups []string, set string, projectRoot string) ([]string, error) {
+	// An explicit -g or --set overrides the project pointer entirely, so the
+	// project config is not an input to this resolution at all. Reading it
+	// anyway made a malformed config fail a command that never needed it —
+	// `moai proxy -g work` has no reason to care that llm.yaml has a typo.
+	if len(groups) > 0 || set != "" {
+		return proxy.ResolveActiveGroups(reg, groups, set, "")
+	}
+
 	var projectDefaultSet string
 	cfg, err := config.NewConfigManager().Load(projectRoot)
 	if err != nil {
@@ -135,22 +143,29 @@ func resolveProxyActiveGroups(reg *proxy.Registry, groups []string, set string, 
 // restarts, which is the hardest possible shape to diagnose. Building per
 // group makes the resolved group's own region and profile authoritative,
 // which is what AC-PROXY-003 ("two bedrock regions coexist") requires.
-func buildProxyBedrockInvokers(ctx context.Context, reg *proxy.Registry) (map[string]proxy.BedrockInvoker, error) {
+func buildProxyBedrockInvokers(ctx context.Context, reg *proxy.Registry) (map[string]proxy.BedrockInvoker, []string) {
 	var invokers map[string]proxy.BedrockInvoker
+	var failures []string
 	for name, g := range reg.Groups {
 		if g.Type != proxy.GroupTypeBedrock {
 			continue
 		}
 		inv, err := proxy.NewAWSBedrockInvoker(ctx, g.Region, g.Profile)
 		if err != nil {
-			return nil, fmt.Errorf("build bedrock invoker for group %q: %w", name, err)
+			// Per-group isolation: one group with a bad profile or region
+			// must not disable the OTHER bedrock groups. Returning an error
+			// here made the caller discard the whole map, so a single
+			// misconfigured group took every working one down with it —
+			// the opposite of what building per group is for.
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			continue
 		}
 		if invokers == nil {
 			invokers = make(map[string]proxy.BedrockInvoker)
 		}
 		invokers[name] = inv
 	}
-	return invokers, nil
+	return invokers, failures
 }
 
 // runProxy is the RunE entry point. Standard cobra flag parsing (not
@@ -186,14 +201,12 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	bedrockInvokers, err := buildProxyBedrockInvokers(ctx, reg)
-	if err != nil {
-		// A misconfigured bedrock group does not block the daemon from
-		// starting for every OTHER group type — same isolation shape as
-		// REQ-PROXY-021 — it just means bedrock-typed requests will fail
-		// per-request instead of at startup.
-		fmt.Fprintf(os.Stderr, "moai proxy: bedrock invoker unavailable, bedrock-typed groups will be inactive: %v\n", err)
-		bedrockInvokers = nil
+	bedrockInvokers, bedrockFailures := buildProxyBedrockInvokers(ctx, reg)
+	for _, f := range bedrockFailures {
+		// Report each unusable group by name and keep serving the rest —
+		// same per-group isolation shape as REQ-PROXY-021. Requests to a
+		// reported group fail per-request with a message naming it.
+		fmt.Fprintf(os.Stderr, "moai proxy: bedrock group inactive (%s)\n", f)
 	}
 
 	daemon := proxy.NewDaemon(stateDir)

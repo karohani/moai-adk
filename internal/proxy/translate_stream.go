@@ -133,6 +133,14 @@ func (tr *openAIStreamTranslator) Feed(line []byte) [][]byte {
 	frames = append(frames, tr.ensureStarted()...)
 
 	if payload == "[DONE]" {
+		// [DONE] is the backend saying "stream over", not "generation
+		// completed normally". Without a finish_reason the generation did
+		// NOT terminate on its own terms, so this is the same truncation
+		// case an EOF represents — finalize() would report end_turn.
+		if tr.finishReason == "" && !tr.terminated {
+			frames = append(frames, tr.truncationFrames("received [DONE] with no finish_reason")...)
+			return frames
+		}
 		frames = append(frames, tr.finalize()...)
 		return frames
 	}
@@ -188,17 +196,23 @@ func (tr *openAIStreamTranslator) CloseTruncated(cause string) [][]byte {
 	if tr.terminated {
 		return nil
 	}
-	// A stream that never started carries no partial content to salvage;
-	// the HTTP layer has not yet committed a 200, so let it report normally.
-	if !tr.started {
-		return nil
-	}
+	// A stream that never produced a chunk still needs terminal frames: the
+	// HTTP layer writes 200 and the SSE headers BEFORE it reads the first
+	// byte from this translator, so staying silent here leaves the client
+	// with a successful-looking response and an empty body. Open the message
+	// first so the error frame arrives inside a well-formed stream.
+	frames := tr.ensureStarted()
 	if tr.finishReason != "" {
 		// The backend DID report a finish reason; the later read error is
 		// incidental (e.g. the connection closing after [DONE]).
-		return tr.finalize()
+		return append(frames, tr.finalize()...)
 	}
+	return append(frames, tr.truncationFrames(cause)...)
+}
 
+// truncationFrames closes any open blocks, emits an explicit error event,
+// and terminates with a stop_reason that is NOT end_turn.
+func (tr *openAIStreamTranslator) truncationFrames(cause string) [][]byte {
 	frames := tr.closeBlocks()
 	frames = append(frames, sseFrame("error", map[string]interface{}{
 		"type": "error",

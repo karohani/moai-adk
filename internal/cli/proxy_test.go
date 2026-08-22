@@ -182,6 +182,7 @@ func TestResolveProxyActiveGroups_ProjectDefaultSetPointerWins(t *testing.T) {
 		t.Errorf("resolveProxyActiveGroups() = %v, want the 2-group 'heavy' set from the project pointer", got)
 	}
 }
+
 // TestBuildProxyBedrockInvokers_BuildsOnePerGroup verifies the daemon
 // builds a SEPARATE invoker for every bedrock group rather than one shared
 // invoker chosen by Go's randomized map iteration. The single-invoker design
@@ -258,5 +259,42 @@ func TestProxyCmd_NoAskUserQuestion(t *testing.T) {
 		if strings.Contains(content, forbidden) {
 			t.Errorf("proxy.go contains %q — CLI code must not call the user-question channel", forbidden)
 		}
+	}
+}
+
+// TestResolveProxyActiveGroups_ExplicitFlagSkipsProjectConfig is the
+// regression guard for a fix that over-reached: surfacing project-config
+// load errors is correct, but the config was being read BEFORE -g/--set was
+// considered, so a malformed llm.yaml failed a command whose resolution
+// never consults it. The documented precedence is that an explicit flag
+// overrides the project pointer.
+func TestResolveProxyActiveGroups_ExplicitFlagSkipsProjectConfig(t *testing.T) {
+	reg := &proxy.Registry{
+		Groups: map[string]proxy.Group{
+			"work": {Type: proxy.GroupTypeLiteLLM, BaseURL: "http://x"},
+		},
+		Sets: map[string][]string{"named": {"work"}},
+	}
+
+	// A project root whose .moai/config is unreadable garbage.
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, ".moai", "config")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte("\t: not: valid: yaml: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := resolveProxyActiveGroups(reg, []string{"work"}, "", root); err != nil {
+		t.Errorf("-g work failed on a malformed project config it never reads: %v", err)
+	} else if len(got) != 1 || got[0] != "work" {
+		t.Errorf("resolved = %v, want [work]", got)
+	}
+
+	if got, err := resolveProxyActiveGroups(reg, nil, "named", root); err != nil {
+		t.Errorf("--set named failed on a malformed project config it never reads: %v", err)
+	} else if len(got) != 1 || got[0] != "work" {
+		t.Errorf("resolved = %v, want [work]", got)
 	}
 }

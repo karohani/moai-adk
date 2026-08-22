@@ -93,7 +93,11 @@ type Daemon struct {
 	// tests must be able to replace.
 	liveness func(DaemonState) bool
 
-	mu        sync.Mutex
+	// mu and stopFuncs travel TOGETHER through every derived copy. Sharing
+	// the map while giving each copy its own zero-value mutex would guard
+	// one map with two locks — a genuine data race, and a potential
+	// "concurrent map read and map write" fatal error.
+	mu        *sync.Mutex
 	stopFuncs map[string]func() error // address -> stop, held by whichever Daemon instance started the server
 }
 
@@ -104,6 +108,7 @@ func NewDaemon(stateDir string) *Daemon {
 		stateDir:    stateDir,
 		lockTimeout: DaemonLockTimeout,
 		liveness:    daemonStateIsLive,
+		mu:          &sync.Mutex{},
 		stopFuncs:   make(map[string]func() error),
 	}
 }
@@ -114,6 +119,7 @@ func (d *Daemon) WithLockTimeout(timeout time.Duration) *Daemon {
 		stateDir:    d.stateDir,
 		lockTimeout: timeout,
 		liveness:    d.liveness,
+		mu:          d.mu,
 		stopFuncs:   d.stopFuncs,
 	}
 }
@@ -126,6 +132,7 @@ func (d *Daemon) withLiveness(probe func(DaemonState) bool) *Daemon {
 		stateDir:    d.stateDir,
 		lockTimeout: d.lockTimeout,
 		liveness:    probe,
+		mu:          d.mu,
 		stopFuncs:   d.stopFuncs,
 	}
 }
@@ -225,6 +232,20 @@ func (d *Daemon) Release() (int, error) {
 	return remaining, nil
 }
 
+// tightenPathMode narrows an existing path's permissions to want, and never
+// widens them. Best-effort: a path that does not exist yet, or one this
+// process does not own, is left alone — the write that follows carries the
+// correct mode for a fresh file anyway.
+func tightenPathMode(path string, want os.FileMode) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if cur := info.Mode().Perm(); cur&^want != 0 {
+		_ = os.Chmod(path, want)
+	}
+}
+
 // readState reads the current DaemonState without acquiring the exclusive
 // lock (callers that need consistency should go through withLock). File
 // absence is normal (no daemon running yet) and returns a zero-value state
@@ -253,12 +274,18 @@ func (d *Daemon) writeStateAtomic(st DaemonState) error {
 	if err := os.MkdirAll(d.stateDir, daemonStateDirMode); err != nil {
 		return fmt.Errorf("proxy daemon: create state dir: %w", err)
 	}
+	// MkdirAll/WriteFile only apply their mode when CREATING. An install
+	// that predates the tightened modes keeps its 0755 dir and 0644 file
+	// forever, so the permissions must be asserted on every write, not
+	// merely requested at creation.
+	tightenPathMode(d.stateDir, daemonStateDirMode)
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return fmt.Errorf("proxy daemon: marshal state: %w", err)
 	}
 	target := daemonStateFilePath(d.stateDir)
 	tmp := target + ".tmp"
+	tightenPathMode(daemonStateFilePath(d.stateDir), daemonStateFileMode)
 	if err := os.WriteFile(tmp, data, daemonStateFileMode); err != nil {
 		return fmt.Errorf("proxy daemon: write temp state: %w", err)
 	}
@@ -275,6 +302,11 @@ func (d *Daemon) withLock(mutate func(DaemonState) (DaemonState, error)) error {
 	if err := os.MkdirAll(d.stateDir, daemonStateDirMode); err != nil {
 		return fmt.Errorf("proxy daemon: create state dir: %w", err)
 	}
+	// MkdirAll/WriteFile only apply their mode when CREATING. An install
+	// that predates the tightened modes keeps its 0755 dir and 0644 file
+	// forever, so the permissions must be asserted on every write, not
+	// merely requested at creation.
+	tightenPathMode(d.stateDir, daemonStateDirMode)
 
 	lock := newDaemonLock()
 	lockPath := daemonLockFilePath(d.stateDir)

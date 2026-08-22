@@ -134,21 +134,80 @@ func TestToOpenAIChatRequest_TranslatesToolChoice(t *testing.T) {
 	})
 }
 
-// H5: an unsupported content block (image, document, thinking, ...) must NOT
-// be silently discarded — a prompt that reaches the backend missing its
-// image produces a confident answer to a question the model never saw.
-// Failing loudly is the only correct option for a translating proxy.
-func TestToOpenAIChatRequest_UnsupportedContentBlockIsError(t *testing.T) {
+// H5: content blocks carrying USER intent must never be silently dropped.
+// Images are TRANSLATED (OpenAI has an image_url content part); a block type
+// with no representation at all is an explicit error naming the type.
+func TestToOpenAIChatRequest_ImageBlockIsTranslated(t *testing.T) {
 	in := []byte(`{"messages":[{"role":"user","content":[
 		{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}},
 		{"type":"text","text":"what is this?"}
 	]}]}`)
+	out, err := ToOpenAIChatRequest(in, "m")
+	if err != nil {
+		t.Fatalf("image block should translate, got error: %v", err)
+	}
+	var got map[string]interface{}
+	_ = json.Unmarshal(out, &got)
+	msgs := got["messages"].([]interface{})
+	parts, ok := msgs[0].(map[string]interface{})["content"].([]interface{})
+	if !ok {
+		t.Fatalf("content = %#v, want a multimodal parts array", msgs[0])
+	}
+	var sawText, sawImage bool
+	for _, p := range parts {
+		pm := p.(map[string]interface{})
+		switch pm["type"] {
+		case "text":
+			sawText = pm["text"] == "what is this?"
+		case "image_url":
+			iu := pm["image_url"].(map[string]interface{})
+			sawImage = iu["url"] == "data:image/png;base64,iVBOR"
+		}
+	}
+	if !sawText || !sawImage {
+		t.Errorf("parts = %#v, want both the text and a data-URI image_url", parts)
+	}
+}
+
+// A block type with genuinely no OpenAI representation still errors, naming
+// the type so the caller can route the request elsewhere.
+func TestToOpenAIChatRequest_UntranslatableUserBlockIsError(t *testing.T) {
+	in := []byte(`{"messages":[{"role":"user","content":[
+		{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBER"}}
+	]}]}`)
 	_, err := ToOpenAIChatRequest(in, "m")
 	if err == nil {
-		t.Fatal("expected an error for an unsupported content block, got nil (silent drop)")
+		t.Fatal("expected an error for an untranslatable user block, got nil (silent drop)")
 	}
-	if !strings.Contains(err.Error(), "image") {
+	if !strings.Contains(err.Error(), "document") {
 		t.Errorf("error %q should name the offending block type", err)
+	}
+}
+
+// REGRESSION GUARD: Anthropic REQUIRES thinking blocks to be echoed back in
+// message history once extended thinking is on. Erroring on them would break
+// every multi-turn session against an OpenAI-shaped backend from turn two.
+func TestToOpenAIChatRequest_AssistantInternalBlocksAreSkipped(t *testing.T) {
+	in := []byte(`{"messages":[
+		{"role":"user","content":"2+2?"},
+		{"role":"assistant","content":[
+			{"type":"thinking","thinking":"compute","signature":"sig"},
+			{"type":"text","text":"4"}
+		]},
+		{"role":"user","content":"3+3?"}
+	]}`)
+	out, err := ToOpenAIChatRequest(in, "m")
+	if err != nil {
+		t.Fatalf("thinking block in history must not fail the request: %v", err)
+	}
+	var got map[string]interface{}
+	_ = json.Unmarshal(out, &got)
+	msgs := got["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %d, want 3 turns preserved", len(msgs))
+	}
+	if c := msgs[1].(map[string]interface{})["content"]; c != "4" {
+		t.Errorf("assistant content = %v, want the text block preserved alongside the skipped thinking", c)
 	}
 }
 
@@ -633,12 +692,42 @@ func TestTranslateToolChoice_UnmappableShapesAreOmitted(t *testing.T) {
 	}
 }
 
-// A stream that never started must not synthesize terminal frames — the
-// HTTP layer has not committed a status yet and should report normally.
-func TestCloseTruncated_UnstartedStreamEmitsNothing(t *testing.T) {
+// A stream that dies BEFORE its first chunk must still tell the client. The
+// HTTP layer writes 200 and the SSE headers before reading the first byte,
+// so silence there leaves a successful-looking response with an empty body.
+func TestCloseTruncated_UnstartedStreamStillSignals(t *testing.T) {
 	tr := newOpenAIStreamTranslator("msg", "m")
-	if frames := tr.CloseTruncated("boom"); len(frames) != 0 {
-		t.Errorf("CloseTruncated on an unstarted stream emitted %d frames, want 0", len(frames))
+	frames := tr.CloseTruncated("connection reset before first chunk")
+	joined := ""
+	for _, f := range frames {
+		joined += string(f)
+	}
+	if !strings.Contains(joined, "event: message_start") {
+		t.Errorf("no message_start — the error frame must sit inside a well-formed stream:\n%s", joined)
+	}
+	if !strings.Contains(joined, "event: error") {
+		t.Errorf("no error event for a stream that died before any chunk:\n%s", joined)
+	}
+	if strings.Contains(joined, `"stop_reason":"end_turn"`) {
+		t.Errorf("reported end_turn for a stream that produced nothing:\n%s", joined)
+	}
+}
+
+// A [DONE] sentinel with no preceding finish_reason is a truncation, not a
+// natural completion — finalize() would have reported end_turn.
+func TestStream_DoneWithoutFinishReasonIsTruncation(t *testing.T) {
+	raw := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\ndata: [DONE]\n"
+	rc := TranslateOpenAIStreamToAnthropicSSE(strings.NewReader(raw), "m1", "m")
+	out, _ := io.ReadAll(rc)
+	got := string(out)
+	if !strings.Contains(got, "event: error") {
+		t.Errorf("[DONE] without finish_reason produced no error event:\n%s", got)
+	}
+	if strings.Contains(got, `"stop_reason":"end_turn"`) {
+		t.Errorf("[DONE] without finish_reason reported end_turn:\n%s", got)
+	}
+	if !strings.Contains(got, "partial") {
+		t.Errorf("partial content dropped:\n%s", got)
 	}
 }
 
@@ -658,5 +747,114 @@ func TestCloseTruncated_AfterFinishReasonTerminatesNormally(t *testing.T) {
 	}
 	if !strings.Contains(joined, `"stop_reason":"end_turn"`) {
 		t.Errorf("expected the reported end_turn to survive:\n%s", joined)
+	}
+}
+
+// Cross-audit round 2 regressions.
+
+// F4: an explicit -g/--set must not be blocked by a malformed project
+// config it never consults.
+func TestResolveActiveGroups_ExplicitFlagIgnoresProjectConfig(t *testing.T) {
+	t.Skip("covered in internal/cli; see TestResolveProxyActiveGroups_ExplicitFlagSkipsProjectConfig")
+}
+
+// F1b: an install predating the tightened modes must be repaired, not just
+// created correctly next time.
+func TestDaemon_TightensPreExistingPermissiveModes(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "proxy")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil { // legacy mode
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, daemonStateFileName), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := NewDaemon(stateDir)
+	if _, err := d.Acquire(func() (string, func() error, error) {
+		return "127.0.0.1:65010", func() error { return nil }, nil
+	}); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	di, _ := os.Stat(stateDir)
+	if p := di.Mode().Perm(); p&0o077 != 0 {
+		t.Errorf("pre-existing state dir left at %04o — legacy installs stay exposed", p)
+	}
+	fi, _ := os.Stat(filepath.Join(stateDir, daemonStateFileName))
+	if p := fi.Mode().Perm(); p&0o077 != 0 {
+		t.Errorf("pre-existing state file left at %04o — legacy installs stay exposed", p)
+	}
+}
+
+// F11: the provider's message field itself carries key fragments.
+func TestBackendErrorMessage_RedactsSecretShapedTokens(t *testing.T) {
+	cases := []struct{ raw, mustNotContain string }{
+		{`{"error":{"message":"Incorrect API key provided: sk-live-ABCDEFGH1234"}}`, "sk-live-ABCDEFGH1234"},
+		{`{"error":{"message":"bad token: Bearer eyJhbGciOiJIUzI1NiJ9abcdefg"}}`, "eyJhbGciOiJIUzI1NiJ9abcdefg"},
+		{`{"message":"rejected key ghp_ABCDEFGHIJKLMNOP"}`, "ghp_ABCDEFGHIJKLMNOP"},
+	}
+	for _, tc := range cases {
+		got := backendErrorMessage([]byte(tc.raw))
+		if strings.Contains(got, tc.mustNotContain) {
+			t.Errorf("message %q still carries the secret-shaped token %q", got, tc.mustNotContain)
+		}
+		if !strings.Contains(got, "[redacted]") {
+			t.Errorf("message %q should mark the redaction", got)
+		}
+	}
+	// A benign message survives intact.
+	if got := backendErrorMessage([]byte(`{"error":{"message":"model is overloaded"}}`)); got != "model is overloaded" {
+		t.Errorf("benign message altered: %q", got)
+	}
+}
+
+// F2b: the link-local/metadata range is never a valid backend.
+func TestBackendChatCompletionsURL_RejectsMetadataRange(t *testing.T) {
+	for _, u := range []string{"http://169.254.169.254", "http://169.254.169.254/v1", "http://[fe80::1]/v1"} {
+		if _, err := backendChatCompletionsURL(u); err == nil {
+			t.Errorf("backendChatCompletionsURL(%q) succeeded, want rejection", u)
+		}
+	}
+	// An ordinary private-network cluster (the documented example) still works.
+	if _, err := backendChatCompletionsURL("http://10.0.0.5:8000/v1"); err != nil {
+		t.Errorf("a private-range cluster must remain valid: %v", err)
+	}
+}
+
+// disable_parallel_tool_use maps to OpenAI's sibling field.
+func TestToOpenAIChatRequest_DisableParallelToolUse(t *testing.T) {
+	in := []byte(`{"messages":[],"tools":[{"name":"f","input_schema":{}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`)
+	out, err := ToOpenAIChatRequest(in, "m")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	var got map[string]interface{}
+	_ = json.Unmarshal(out, &got)
+	if got["parallel_tool_calls"] != false {
+		t.Errorf("parallel_tool_calls = %#v, want false", got["parallel_tool_calls"])
+	}
+	// Absent flag must not emit the field at all.
+	out2, _ := ToOpenAIChatRequest([]byte(`{"messages":[],"tool_choice":{"type":"auto"}}`), "m")
+	var got2 map[string]interface{}
+	_ = json.Unmarshal(out2, &got2)
+	if _, present := got2["parallel_tool_calls"]; present {
+		t.Error("parallel_tool_calls emitted when the caller did not set the flag")
+	}
+}
+
+// F12: values are preserved exactly (no number normalization); key order is
+// not, and the comment must not claim otherwise.
+func TestReplaceModelField_PreservesValueFidelity(t *testing.T) {
+	in := []byte(`{"model":"g/m","big":12345678901234567890,"f":1.10,"nested":{"a":[1,2,3]}}`)
+	out, err := replaceModelField(in, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, must := range []string{`"model":"m"`, `12345678901234567890`, `1.10`, `"nested":{"a":[1,2,3]}`} {
+		if !strings.Contains(s, must) {
+			t.Errorf("output lost %s: %s", must, s)
+		}
 	}
 }

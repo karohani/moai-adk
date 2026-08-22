@@ -140,6 +140,12 @@ func ToOpenAIChatRequest(anthropicBody []byte, model string) ([]byte, error) {
 	if choice, ok := translateToolChoice(req.ToolChoice); ok {
 		out["tool_choice"] = choice
 	}
+	if disableParallel(req.ToolChoice) {
+		// Anthropic carries this INSIDE tool_choice; OpenAI has it as a
+		// sibling field. Dropping it let the backend fan out tool calls the
+		// caller explicitly forbade.
+		out["parallel_tool_calls"] = false
+	}
 	if req.Stream {
 		out["stream"] = true
 		// stream_options.include_usage is REQUIRED for a spec-conforming
@@ -186,6 +192,21 @@ type anthTool struct {
 // ok is false when the field is absent or unparseable — an unrecognized
 // shape is left off the outbound request rather than guessed at, matching
 // the top_k drop's "no equivalent, so omit" convention.
+// disableParallel reads Anthropic's tool_choice.disable_parallel_tool_use,
+// which OpenAI expresses as the top-level parallel_tool_calls field.
+func disableParallel(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var tc struct {
+		DisableParallelToolUse bool `json:"disable_parallel_tool_use"`
+	}
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return false
+	}
+	return tc.DisableParallelToolUse
+}
+
 func translateToolChoice(raw json.RawMessage) (interface{}, bool) {
 	if len(raw) == 0 {
 		return nil, false
@@ -262,6 +283,7 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 	}
 
 	var textParts []string
+	var imageParts []interface{}
 	var toolCalls []interface{}
 	var toolResultMessages []interface{}
 
@@ -282,6 +304,17 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 					"arguments": string(args),
 				},
 			})
+		case "image":
+			// OpenAI Chat Completions DOES represent images, as an
+			// image_url content part carrying a data: URI. Translating is
+			// strictly better than either dropping the image (the original
+			// defect) or rejecting the request: a multimodal turn keeps
+			// working against a backend that supports it.
+			part, err := anthropicImageToOpenAIPart(b)
+			if err != nil {
+				return nil, err
+			}
+			imageParts = append(imageParts, part)
 		case "tool_result":
 			toolResultMessages = append(toolResultMessages, map[string]interface{}{
 				"role":         "tool",
@@ -289,16 +322,26 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 				"content":      toolResultContentToString(b.Content),
 			})
 		default:
-			// An unsupported block type (image, document, thinking, ...)
-			// MUST NOT be dropped silently. Dropping it ships an
+			if assistantInternalBlockTypes[b.Type] {
+				// Assistant-internal scaffolding from an EARLIER turn
+				// (reasoning traces, server-side tool bookkeeping). OpenAI
+				// has no representation, and omitting it loses no user
+				// intent — the assistant's own `text` answer from that turn
+				// is translated normally alongside it. Erroring here would
+				// break every multi-turn session that has extended thinking
+				// enabled, because Anthropic requires those blocks to be
+				// echoed back in the message history.
+				continue
+			}
+			// Everything else carries USER intent the model is being asked
+			// to reason about (image, document, ...). Dropping it ships an
 			// incomplete prompt to the backend, which then answers
-			// confidently about content it never saw — the failure is
-			// invisible to the caller and indistinguishable from a real
-			// answer. Failing loudly is the only safe option for a
-			// translating proxy: the caller learns immediately that this
-			// backend cannot serve this request.
+			// confidently about content it never saw — a failure invisible
+			// to the caller and indistinguishable from a real answer.
+			// Failing loudly is the only safe option for a translating
+			// proxy.
 			return nil, fmt.Errorf(
-				"proxy: anthropic content block type %q has no OpenAI Chat Completions equivalent and cannot be translated; route this request to an anthropic-native group (bedrock/litellm) instead",
+				"proxy: anthropic content block type %q carries user content with no OpenAI Chat Completions equivalent and cannot be translated; route this request to an anthropic-native group (bedrock/litellm) instead",
 				b.Type)
 		}
 	}
@@ -309,11 +352,24 @@ func translateAnthropicMessageToOpenAI(m anthMessage) ([]interface{}, error) {
 	// turn's own text message first would interpose a user message between
 	// the two and violate that sequencing, so tool results lead.
 	result = append(result, toolResultMessages...)
-	if len(textParts) > 0 || len(toolCalls) > 0 {
+	if len(textParts) > 0 || len(toolCalls) > 0 || len(imageParts) > 0 {
 		msg := map[string]interface{}{"role": m.Role}
-		if len(textParts) > 0 {
+		switch {
+		case len(imageParts) > 0:
+			// OpenAI's multimodal form: content becomes an array of parts.
+			// Text leads so the image follows the instruction that refers
+			// to it, matching how Anthropic clients order the blocks.
+			parts := make([]interface{}, 0, len(imageParts)+1)
+			if len(textParts) > 0 {
+				parts = append(parts, map[string]interface{}{
+					"type": "text", "text": strings.Join(textParts, ""),
+				})
+			}
+			parts = append(parts, imageParts...)
+			msg["content"] = parts
+		case len(textParts) > 0:
 			msg["content"] = strings.Join(textParts, "")
-		} else {
+		default:
 			msg["content"] = nil
 		}
 		if len(toolCalls) > 0 {
@@ -332,6 +388,61 @@ type anthContentBlock struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage        `json:"content,omitempty"`
+	Source    anthImageSource        `json:"source,omitempty"`
+}
+
+// anthImageSource is Anthropic's image payload: either inline base64 with a
+// media type, or a URL.
+type anthImageSource struct {
+	Type      string `json:"type,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
+// assistantInternalBlockTypes names content blocks that carry the
+// ASSISTANT's own prior scaffolding rather than user intent. OpenAI has no
+// representation for them, but omitting them loses nothing the model needs:
+// the assistant's `text` from that same turn is translated alongside.
+//
+// They must be skipped rather than rejected because Anthropic REQUIRES
+// thinking blocks to be echoed back in the message history once extended
+// thinking is enabled — erroring would break every multi-turn session
+// against an OpenAI-shaped backend from its second turn onward.
+var assistantInternalBlockTypes = map[string]bool{
+	"thinking":               true,
+	"redacted_thinking":      true,
+	"server_tool_use":        true,
+	"web_search_tool_result": true,
+}
+
+// anthropicImageToOpenAIPart converts an Anthropic image block into an
+// OpenAI image_url content part. Anthropic carries the bytes inline
+// (base64 + media_type) or by URL; OpenAI takes a single url field, so a
+// base64 source becomes a data: URI.
+func anthropicImageToOpenAIPart(b anthContentBlock) (interface{}, error) {
+	switch b.Source.Type {
+	case "base64":
+		if b.Source.MediaType == "" || b.Source.Data == "" {
+			return nil, fmt.Errorf("proxy: image block has an incomplete base64 source (media_type or data missing)")
+		}
+		return map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url": "data:" + b.Source.MediaType + ";base64," + b.Source.Data,
+			},
+		}, nil
+	case "url":
+		if b.Source.URL == "" {
+			return nil, fmt.Errorf("proxy: image block has a url source with no url")
+		}
+		return map[string]interface{}{
+			"type":      "image_url",
+			"image_url": map[string]interface{}{"url": b.Source.URL},
+		}, nil
+	default:
+		return nil, fmt.Errorf("proxy: image block source type %q is not supported", b.Source.Type)
+	}
 }
 
 // toolResultContentToString normalizes a tool_result block's content

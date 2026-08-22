@@ -183,11 +183,20 @@ func (h *MessagesHandler) serveLiteLLM(w http.ResponseWriter, r *http.Request, g
 	proxy.ServeHTTP(w, r)
 }
 
-// replaceModelField rewrites ONLY the top-level "model" field of an
-// Anthropic request body, leaving every other field byte-for-byte as the
-// client sent it. Round-tripping through a generic map would reorder keys
-// and normalize numbers; keeping the edit surgical preserves the passthrough
-// guarantee everywhere it actually applies.
+// replaceModelField rewrites the top-level "model" field of an Anthropic
+// request body and preserves every other field's VALUE exactly.
+//
+// Decoding into map[string]json.RawMessage rather than map[string]interface{}
+// is what makes that true: raw values are re-emitted as the client wrote
+// them, so a large integer is not turned into 1.2345678901234567e+19 and
+// "1.10" does not become "1.1". Numeric fidelity is the property that
+// matters for a relay.
+//
+// What is NOT preserved, and cannot be without a streaming rewriter: key
+// ORDER (Go marshals map keys sorted) and duplicate top-level keys (the last
+// occurrence wins, as in any JSON parser). Neither is semantically
+// significant in JSON, so no backend can observe the difference — but the
+// distinction is worth stating rather than claiming a byte-identical relay.
 func replaceModelField(body []byte, model string) ([]byte, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {

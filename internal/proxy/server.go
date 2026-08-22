@@ -16,6 +16,14 @@ const shutdownTimeout = 5 * time.Second
 // headers (gosec G112 / slowloris).
 const readHeaderTimeout = 10 * time.Second
 
+// readTimeout bounds reading the ENTIRE request (headers + body). Without
+// it a client can send headers promptly and then drip the body forever,
+// pinning a goroutine on a machine-wide shared daemon. Safe to set here
+// because only RESPONSES stream — requests are bounded JSON bodies — so
+// this cannot truncate a long-running completion the way WriteTimeout
+// would, which is why WriteTimeout stays unset.
+const readTimeout = 60 * time.Second
+
 // StartServer binds a loopback-only listener on an OS-assigned unprivileged
 // port (REQ-PROXY-022, REQ-PROXY-023) and serves handler on it. It returns
 // the bound address, a stop function for graceful shutdown, and an error.
@@ -39,6 +47,7 @@ func StartServer(handler http.Handler) (address string, stop func() error, err e
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
 	}
 
 	serveErrCh := make(chan error, 1)
